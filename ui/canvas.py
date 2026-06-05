@@ -32,8 +32,8 @@ def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale):
     for ps in placed_shapes:
         x0 = int(ps.x_in * scale)
         y0 = int(ps.y_in * scale)
-        x1 = int((ps.x_in + ps.shape.width_in)  * scale)
-        y1 = int((ps.y_in + ps.shape.height_in) * scale)
+        x1 = int((ps.x_in + ps.placed_width)  * scale)
+        y1 = int((ps.y_in + ps.placed_height) * scale)
 
         draw.rectangle(
             [x0, y0, x1, y1],
@@ -42,7 +42,7 @@ def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale):
             width=2,
         )
 
-        label = f'{ps.shape.width_in:.1f}" x {ps.shape.height_in:.1f}"'
+        label = f'{ps.placed_width:.1f}" x {ps.placed_height:.1f}"'
         draw.text((x0 + 6, y0 + 6), label, fill=LABEL_COLOR)
 
     used_area  = sum(ps.shape.area() for ps in placed_shapes)
