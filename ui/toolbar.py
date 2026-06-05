@@ -5,7 +5,7 @@
 # PDF reading, nesting, or exporting.
 
 import tkinter as tk
-
+from tkinter import ttk
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 
@@ -43,12 +43,12 @@ def build_toolbar(root, callbacks, defaults):
                       load_pdf, nest_shapes, zoom_in, zoom_out,
                       zoom_fit, prev_sheet, next_sheet, export_pdf
         defaults  : dict of default values:
-                      spacing, padding
+                      spacing, padding, rotation
 
     Returns:
         refs : dict of widget references the app needs to read or update:
-                 spacing_var, padding_var, status_var,
-                 sheet_label, usage_label
+                 spacing_var, padding_var, rotation_var,
+                 status_var, sheet_label, usage_label
     """
     refs = {}
 
@@ -56,11 +56,11 @@ def build_toolbar(root, callbacks, defaults):
     top = tk.Frame(root, bg=BG, pady=8)
     top.pack(fill="x", padx=12)
 
-    _button(top, "Load PDF",     BTN_BLUE,  callbacks.get("load_pdf")
+    _button(top, "Load PDF",   BTN_BLUE,  callbacks.get("load_pdf")
             ).pack(side="left", padx=4)
-    _button(top, "Nest Shapes",  BTN_GREEN, callbacks.get("nest_shapes")
+    _button(top, "Nest Shapes", BTN_GREEN, callbacks.get("nest_shapes")
             ).pack(side="left", padx=4)
-    _button(top, "Export PDF",   BTN_GREEN, callbacks.get("export_pdf")
+    _button(top, "Export PDF", BTN_GREEN, callbacks.get("export_pdf")
             ).pack(side="left", padx=4)
 
     # ── Settings row ──────────────────────────────────────────────────────────
@@ -81,8 +81,32 @@ def build_toolbar(root, callbacks, defaults):
              width=8).pack(side="left", padx=4)
     refs["padding_var"] = padding_var
 
+    # ── Rotation control ──────────────────────────────────────────────────────
+    tk.Label(settings, text="Rotation:",
+             bg=BG).pack(side="left", padx=(12, 0))
+    rotation_var = tk.StringVar(value=defaults.get("rotation", "none"))
+    rotation_menu = ttk.Combobox(
+        settings,
+        textvariable=rotation_var,
+        values=["none", "90°", "180°", "270°", "free"],
+        state="readonly",
+        width=8,
+    )
+    rotation_menu.pack(side="left", padx=4)
+    refs["rotation_var"] = rotation_var
+
+    # Rotation legend
+    tk.Label(
+        settings,
+        text="(none = flute-safe for Coroplast)",
+        bg=BG,
+        fg="#888888",
+        font=("Arial", 8),
+    ).pack(side="left", padx=(0, 12))
+
+    # ── Zoom controls ─────────────────────────────────────────────────────────
     tk.Label(settings, text="Zoom:",
-             bg=BG).pack(side="left", padx=(20, 4))
+             bg=BG).pack(side="left", padx=(12, 4))
     _button(settings, "−", BTN_NEUTRAL, callbacks.get("zoom_out"),
             fg="black").pack(side="left", padx=2)
     _button(settings, "+", BTN_NEUTRAL, callbacks.get("zoom_in"),

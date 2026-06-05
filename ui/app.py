@@ -24,29 +24,30 @@ class NestingApp:
         self.root.configure(bg="#f0f0f0")
 
         # ── Application state ─────────────────────────────────────────────────
-        self.source_pdf    = None   # path to the loaded PDF
-        self.shapes        = []     # list of Shape objects
-        self.sheets        = []     # list of sheets (each a list of PlacedShape)
-        self.current_sheet = 0      # index of the sheet being previewed
-        self.scale         = 8.0    # pixels per inch for preview
-        self.tk_image_ref  = [None] # holds PhotoImage to prevent GC
+        self.source_pdf    = None
+        self.shapes        = []
+        self.sheets        = []
+        self.current_sheet = 0
+        self.scale         = 8.0
+        self.tk_image_ref  = [None]
 
         # ── Build UI ──────────────────────────────────────────────────────────
         self.refs = build_toolbar(
             root=self.root,
             callbacks={
-                "load_pdf":   self.load_pdf,
+                "load_pdf":    self.load_pdf,
                 "nest_shapes": self.run_nest,
-                "export_pdf": self.export_pdf,
-                "zoom_in":    self.zoom_in,
-                "zoom_out":   self.zoom_out,
-                "zoom_fit":   self.zoom_fit,
-                "prev_sheet": self.prev_sheet,
-                "next_sheet": self.next_sheet,
+                "export_pdf":  self.export_pdf,
+                "zoom_in":     self.zoom_in,
+                "zoom_out":    self.zoom_out,
+                "zoom_fit":    self.zoom_fit,
+                "prev_sheet":  self.prev_sheet,
+                "next_sheet":  self.next_sheet,
             },
             defaults={
-                "spacing": 0.1969,
-                "padding": 0.25,
+                "spacing":  0.1969,
+                "padding":  0.25,
+                "rotation": "none",
             },
         )
 
@@ -145,12 +146,15 @@ class NestingApp:
         self.status_var.set("Nesting shapes…")
         self.root.update_idletasks()
 
+        rotation_mode = self.refs["rotation_var"].get()
+
         self.sheets = nest_shapes(
             self.shapes,
-            sheet_w = SHEET_W_IN,
-            sheet_h = SHEET_H_IN,
-            padding = self._padding(),
-            spacing = self._spacing(),
+            sheet_w       = SHEET_W_IN,
+            sheet_h       = SHEET_H_IN,
+            padding       = self._padding(),
+            spacing       = self._spacing(),
+            rotation_mode = rotation_mode,
         )
 
         self.current_sheet = 0
@@ -159,7 +163,8 @@ class NestingApp:
 
         self.status_var.set(
             f"{total_shapes} shapes arranged across "
-            f"{total} sheet{'s' if total != 1 else ''}."
+            f"{total} sheet{'s' if total != 1 else ''}  ·  "
+            f"Rotation: {rotation_mode}"
         )
 
         self.scale = compute_fit_scale(self.canvas, SHEET_W_IN, SHEET_H_IN)
@@ -261,3 +266,11 @@ class NestingApp:
             self.scale = compute_fit_scale(
                 self.canvas, SHEET_W_IN, SHEET_H_IN)
             self.show_sheet()
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app  = NestingApp(root)
+    root.mainloop()

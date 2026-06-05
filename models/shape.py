@@ -7,10 +7,10 @@ class Shape:
     """Represents a single die-cut shape extracted from the source PDF."""
 
     def __init__(self, width_in, height_in, source_rect, source_page):
-        self.width_in    = width_in      # bounding box width in inches
-        self.height_in   = height_in     # bounding box height in inches
-        self.source_rect = source_rect   # fitz.Rect in the source PDF (points)
-        self.source_page = source_page   # page index in the source PDF
+        self.width_in    = width_in
+        self.height_in   = height_in
+        self.source_rect = source_rect
+        self.source_page = source_page
 
     def area(self):
         return self.width_in * self.height_in
@@ -20,21 +20,37 @@ class Shape:
 
 
 class PlacedShape:
-    """Represents a Shape that has been assigned a position on a sheet."""
+    """Represents a Shape assigned a position on a sheet."""
 
-    def __init__(self, shape, x_in, y_in, sheet_index):
-        self.shape       = shape         # Shape instance
-        self.x_in        = x_in          # left edge on sheet in inches
-        self.y_in        = y_in          # top edge on sheet in inches
-        self.sheet_index = sheet_index   # which sheet (0-based)
+    def __init__(self, shape, x_in, y_in, sheet_index, rotated=False):
+        self.shape       = shape
+        self.x_in        = x_in
+        self.y_in        = y_in
+        self.sheet_index = sheet_index
+        self.rotated     = rotated     # True if shape was rotated 90°
+
+    @property
+    def placed_width(self):
+        """Actual width on sheet accounting for rotation."""
+        if self.rotated:
+            return self.shape.height_in
+        return self.shape.width_in
+
+    @property
+    def placed_height(self):
+        """Actual height on sheet accounting for rotation."""
+        if self.rotated:
+            return self.shape.width_in
+        return self.shape.height_in
 
     def right(self):
-        return self.x_in + self.shape.width_in
+        return self.x_in + self.placed_width
 
     def bottom(self):
-        return self.y_in + self.shape.height_in
+        return self.y_in + self.placed_height
 
     def __repr__(self):
-        return (f"PlacedShape({self.shape} @ "
+        rot = " [rotated]" if self.rotated else ""
+        return (f"PlacedShape({self.shape}{rot} @ "
                 f"{self.x_in:.2f}\", {self.y_in:.2f}\" "
                 f"sheet {self.sheet_index})")
