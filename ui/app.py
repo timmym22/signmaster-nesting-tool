@@ -253,6 +253,7 @@ class NestingApp:
             sheet_w_in    = SHEET_W_IN,
             sheet_h_in    = SHEET_H_IN,
             scale         = self.scale,
+            source_pdf    = self.source_pdf,
         )
 
         self.tk_image_ref = display_image_on_canvas(

@@ -4,6 +4,7 @@
 # Tkinter canvas. Nothing in this file knows about PDF reading,
 # nesting, or exporting.
 
+import fitz
 from PIL import Image, ImageDraw, ImageTk
 
 # ── Visual constants ──────────────────────────────────────────────────────────
@@ -16,7 +17,7 @@ CANVAS_BG     = "#888888"
 SHEET_BORDER  = "#000000"
 
 
-def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale):
+def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale, source_pdf=None):
     img_w = max(1, int(sheet_w_in * scale))
     img_h = max(1, int(sheet_h_in * scale))
 
@@ -35,15 +36,30 @@ def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale):
         x1 = int((ps.x_in + ps.placed_width)  * scale)
         y1 = int((ps.y_in + ps.placed_height) * scale)
 
-        draw.rectangle(
-            [x0, y0, x1, y1],
-            fill=SHAPE_FILL,
-            outline=SHAPE_OUTLINE,
-            width=2,
-        )
+        thumb = None
+        if source_pdf is not None:
+            try:
+                doc      = fitz.open(source_pdf)
+                src_page = doc[ps.shape.source_page]
+                clip     = ps.shape.source_rect
+                zoom     = scale / 72.0
+                mat      = fitz.Matrix(zoom, zoom)
+                pix      = src_page.get_pixmap(matrix=mat, clip=clip, alpha=False)
+                thumb    = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                doc.close()
+            except Exception:
+                thumb = None
 
-        label = f'{ps.placed_width:.1f}" x {ps.placed_height:.1f}"'
-        draw.text((x0 + 6, y0 + 6), label, fill=LABEL_COLOR)
+        if thumb is not None:
+            img.paste(thumb, (x0, y0))
+        else:
+            draw.rectangle(
+                [x0, y0, x1, y1],
+                fill=SHAPE_FILL,
+                outline=SHAPE_OUTLINE,
+                width=2,
+            )
+
 
     used_area  = sum(ps.shape.area() for ps in placed_shapes)
     sheet_area = sheet_w_in * sheet_h_in
