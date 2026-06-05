@@ -5,6 +5,7 @@
 # Nothing in this file knows about the UI or PDF reading.
 
 from models.shape import PlacedShape
+from shapely.geometry import Polygon as ShapelyPolygon
 
 # ── Sheet defaults ────────────────────────────────────────────────────────────
 
@@ -215,6 +216,190 @@ def _pack_sheet(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode):
     return placed, unplaced
 
 
+def _build_candidate_positions(sheet_w, sheet_h, padding, spacing, shape, placed_polys):
+    """
+    Generate candidate positions using snap points from placed shapes.
+    Prioritizes bottom-of-sheet first, fills left-to-right within each row,
+    sorted by distance from horizontal center within each y level.
+    """
+    x_snaps = set()
+    y_snaps = set()
+
+    x_snaps.add(padding)
+    y_snaps.add(sheet_h - padding - shape.height_in)
+
+    for poly in placed_polys:
+        bounds = poly.bounds
+        x_snaps.add(bounds[0])
+        x_snaps.add(bounds[2] + spacing)
+        if bounds[0] - shape.width_in - spacing >= padding:
+            x_snaps.add(bounds[0] - shape.width_in - spacing)
+        y_snaps.add(bounds[1])
+        y_snaps.add(bounds[1] - shape.height_in - spacing)
+
+    candidates = []
+    for y in sorted(y_snaps, reverse=True):
+        if y < padding:
+            continue
+        if y + shape.height_in > sheet_h - padding:
+            continue
+        row = []
+        for x in sorted(x_snaps):
+            if x < padding:
+                continue
+            if x + shape.width_in > sheet_w - padding:
+                continue
+            row.append((x, y))
+        sheet_center = sheet_w / 2.0
+        row.sort(key=lambda c: abs(c[0] + shape.width_in / 2.0 - sheet_center))
+        candidates.extend(row)
+
+    return candidates
+
+
+def _offset_polygon(contour_polygon, x_in, y_in):
+    """
+    Translate a contour polygon (already in local inch coordinates, origin 0,0)
+    to its placement position (x_in, y_in) on the sheet.
+    """
+    coords = [(px + x_in, py + y_in)
+              for px, py in contour_polygon.exterior.coords]
+    return ShapelyPolygon(coords)
+
+
+def _shapes_overlap(poly_a, poly_b, spacing):
+    """
+    Return True if poly_a and poly_b overlap or are within spacing inches of each other.
+    """
+    buffered = poly_b.buffer(spacing / 2.0)
+    return poly_a.intersects(buffered)
+
+
+def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing):
+    """
+    Pack shapes onto one sheet using a two-pass strategy:
+    Pass 1 — greedy row fill: build rows from the bottom up, filling each
+              row left-to-right before starting a new row above it.
+    Pass 2 — gap fill: try to fit any remaining unplaced shapes into gaps
+              left by pass 1 using snap-point candidates.
+    Falls back to bounding-box rectangle for shapes without contour_polygon.
+    Returns (placed, unplaced).
+    """
+    placed_polys = []
+    placed       = []
+    remaining    = list(shapes)
+
+    sheet_poly = ShapelyPolygon([
+        (padding,           padding),
+        (sheet_w - padding, padding),
+        (sheet_w - padding, sheet_h - padding),
+        (padding,           sheet_h - padding),
+    ])
+
+    def make_poly(shape, cx, cy):
+        if shape.contour_polygon is not None:
+            return _offset_polygon(shape.contour_polygon, cx, cy)
+        return ShapelyPolygon([
+            (cx,                  cy),
+            (cx + shape.width_in, cy),
+            (cx + shape.width_in, cy + shape.height_in),
+            (cx,                  cy + shape.height_in),
+        ])
+
+    def try_place(shape, cx, cy):
+        poly = make_poly(shape, cx, cy)
+        if not sheet_poly.contains(poly):
+            return None
+        for pp in placed_polys:
+            if _shapes_overlap(poly, pp, spacing):
+                return None
+        return poly
+
+    # ── Pass 1: row-based fill bottom to top ─────────────────────────────────
+    current_y    = sheet_h - padding  # start at bottom
+    unplaced     = []
+
+    while remaining:
+        # Find the tallest shape that fits from remaining to set row height
+        row_shapes   = []
+        row_height   = 0
+        still_remaining = []
+
+        # Try to build a row: scan remaining shapes, place them left to right
+        current_x = padding
+        row_candidates = list(remaining)
+
+        # Sort by height descending to set row height with tallest first
+        row_candidates.sort(key=lambda s: s.height_in, reverse=True)
+
+        placed_in_row = []
+        for shape in row_candidates:
+            if current_x + shape.width_in + spacing > sheet_w - padding:
+                continue
+            place_y = current_y - shape.height_in
+            if place_y < padding:
+                continue
+            poly = try_place(shape, current_x, place_y)
+            if poly is not None:
+                placed_in_row.append((shape, current_x, place_y, poly))
+                current_x += shape.width_in + spacing
+                if shape.height_in > row_height:
+                    row_height = shape.height_in
+
+        if not placed_in_row:
+            break
+
+        # Commit the row — center it horizontally
+        row_width = current_x - spacing - padding
+        x_offset  = (sheet_w - row_width - padding) / 2.0
+
+        for (shape, rx, ry, poly) in placed_in_row:
+            centered_x = rx + x_offset - padding
+            centered_x = max(padding, min(centered_x, sheet_w - padding - shape.width_in))
+            final_poly = try_place(shape, centered_x, ry)
+            if final_poly is None:
+                final_poly = poly
+                centered_x = rx
+
+            placed_polys.append(final_poly)
+            placed.append(PlacedShape(
+                shape       = shape,
+                x_in        = centered_x,
+                y_in        = ry,
+                sheet_index = 0,
+                rotated     = False,
+            ))
+            remaining.remove(shape)
+
+        current_y -= row_height + spacing
+
+    # ── Pass 2: gap fill with snap points ────────────────────────────────────
+    still_unplaced = []
+    for shape in remaining:
+        candidates = _build_candidate_positions(
+            sheet_w, sheet_h, padding, spacing, shape, placed_polys)
+
+        placed_this = False
+        for (cx, cy) in candidates:
+            poly = try_place(shape, cx, cy)
+            if poly is not None:
+                placed_polys.append(poly)
+                placed.append(PlacedShape(
+                    shape       = shape,
+                    x_in        = cx,
+                    y_in        = cy,
+                    sheet_index = 0,
+                    rotated     = False,
+                ))
+                placed_this = True
+                break
+
+        if not placed_this:
+            still_unplaced.append(shape)
+
+    return placed, still_unplaced
+
+
 # ── Public interface ──────────────────────────────────────────────────────────
 
 def nest_shapes(shapes,
@@ -222,7 +407,8 @@ def nest_shapes(shapes,
                 sheet_h=SHEET_H_IN,
                 padding=DEFAULT_PADDING_IN,
                 spacing=DEFAULT_SPACING_IN,
-                rotation_mode="none"):
+                rotation_mode="none",
+                method="contour"):
     """
     Arrange shapes onto as few sheets as possible.
 
@@ -245,9 +431,13 @@ def nest_shapes(shapes,
     sheets = []
 
     while remaining:
-        placed, remaining = _pack_sheet(
-            remaining, sheet_w, sheet_h,
-            padding, spacing, rotation_mode)
+        if method == "contour":
+            placed, remaining = _pack_sheet_contour(
+                remaining, sheet_w, sheet_h, padding, spacing)
+        else:
+            placed, remaining = _pack_sheet(
+                remaining, sheet_w, sheet_h,
+                padding, spacing, rotation_mode)
 
         sheet_index = len(sheets)
         for ps in placed:

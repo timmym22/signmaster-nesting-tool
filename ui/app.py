@@ -147,6 +147,7 @@ class NestingApp:
         self.root.update_idletasks()
 
         rotation_mode = self.refs["rotation_var"].get()
+        method = self.refs["method_var"].get()
 
         self.sheets = nest_shapes(
             self.shapes,
@@ -155,6 +156,7 @@ class NestingApp:
             padding       = self._padding(),
             spacing       = self._spacing(),
             rotation_mode = rotation_mode,
+            method        = method,
         )
 
         self.current_sheet = 0
@@ -164,7 +166,7 @@ class NestingApp:
         self.status_var.set(
             f"{total_shapes} shapes arranged across "
             f"{total} sheet{'s' if total != 1 else ''}  ·  "
-            f"Rotation: {rotation_mode}"
+            f"Rotation: {rotation_mode}  ·  Method: {method}"
         )
 
         self.scale = compute_fit_scale(self.canvas, SHEET_W_IN, SHEET_H_IN)

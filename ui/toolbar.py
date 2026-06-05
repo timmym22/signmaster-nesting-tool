@@ -104,6 +104,20 @@ def build_toolbar(root, callbacks, defaults):
         font=("Arial", 8),
     ).pack(side="left", padx=(0, 12))
 
+    # ── Nesting method row ────────────────────────────────────────────────────
+    method_row = tk.Frame(root, bg=BG)
+    method_row.pack(fill="x", padx=12, pady=4)
+
+    tk.Label(method_row, text="Nesting Method:",
+             bg=BG).pack(side="left")
+    method_var = tk.StringVar(value="contour")
+    tk.OptionMenu(
+        method_row,
+        method_var,
+        *["contour", "bounding box"],
+    ).pack(side="left", padx=4)
+    refs["method_var"] = method_var
+
     # ── Zoom controls ─────────────────────────────────────────────────────────
     tk.Label(settings, text="Zoom:",
              bg=BG).pack(side="left", padx=(12, 4))

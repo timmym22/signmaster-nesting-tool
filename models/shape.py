@@ -6,11 +6,12 @@
 class Shape:
     """Represents a single die-cut shape extracted from the source PDF."""
 
-    def __init__(self, width_in, height_in, source_rect, source_page):
+    def __init__(self, width_in, height_in, source_rect, source_page, contour_polygon=None):
         self.width_in    = width_in
         self.height_in   = height_in
         self.source_rect = source_rect
         self.source_page = source_page
+        self.contour_polygon = contour_polygon
 
     def area(self):
         return self.width_in * self.height_in
@@ -22,12 +23,13 @@ class Shape:
 class PlacedShape:
     """Represents a Shape assigned a position on a sheet."""
 
-    def __init__(self, shape, x_in, y_in, sheet_index, rotated=False):
+    def __init__(self, shape, x_in, y_in, sheet_index, rotated=False, rotation_deg=0.0):
         self.shape       = shape
         self.x_in        = x_in
         self.y_in        = y_in
         self.sheet_index = sheet_index
         self.rotated     = rotated     # True if shape was rotated 90°
+        self.rotation_deg = rotation_deg
 
     @property
     def placed_width(self):

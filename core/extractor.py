@@ -5,6 +5,7 @@
 
 import fitz  # PyMuPDF
 from models.shape import Shape
+from shapely.geometry import Polygon as ShapelyPolygon
 
 # ── Cut contour color detection ───────────────────────────────────────────────
 # CorelDRAW exports the cut contour as a specific pink/magenta stroke.
@@ -51,6 +52,55 @@ def _is_cut_contour(color_tuple):
             PINK_B_MIN <= b <= PINK_B_MAX)
 
 
+def _path_to_polygon(path, rect):
+    """
+    Extract vertices from a PyMuPDF path dict and return a Shapely Polygon
+    normalized to local inch coordinates with origin at (0, 0).
+    Returns None if the path has fewer than 3 usable points.
+    """
+    origin_x = rect.x0
+    origin_y = rect.y0
+    scale    = 1.0 / 72.0
+
+    points = []
+    for item in path.get("items", []):
+        kind = item[0]
+        if kind == "l":
+            points.append(((item[1].x - origin_x) * scale,
+                           (item[1].y - origin_y) * scale))
+            points.append(((item[2].x - origin_x) * scale,
+                           (item[2].y - origin_y) * scale))
+        elif kind == "c":
+            points.append(((item[1].x - origin_x) * scale,
+                           (item[1].y - origin_y) * scale))
+            points.append(((item[4].x - origin_x) * scale,
+                           (item[4].y - origin_y) * scale))
+        elif kind == "re":
+            r = item[1]
+            points += [
+                ((r.x0 - origin_x) * scale, (r.y0 - origin_y) * scale),
+                ((r.x1 - origin_x) * scale, (r.y0 - origin_y) * scale),
+                ((r.x1 - origin_x) * scale, (r.y1 - origin_y) * scale),
+                ((r.x0 - origin_x) * scale, (r.y1 - origin_y) * scale),
+            ]
+
+    deduped = [points[0]] if points else []
+    for p in points[1:]:
+        if p != deduped[-1]:
+            deduped.append(p)
+
+    if len(deduped) < 3:
+        return None
+
+    try:
+        poly = ShapelyPolygon(deduped)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+        return poly if poly.is_valid else None
+    except Exception:
+        return None
+
+
 def extract_shapes(pdf_path):
     """
     Open a CorelDRAW-exported PDF and extract all pink cut-contour shapes.
@@ -85,10 +135,11 @@ def extract_shapes(pdf_path):
             height_in = rect.height / 72.0
 
             shapes.append(Shape(
-                width_in    = width_in,
-                height_in   = height_in,
-                source_rect = rect,
-                source_page = page_index,
+                width_in        = width_in,
+                height_in       = height_in,
+                source_rect     = rect,
+                source_page     = page_index,
+                contour_polygon = _path_to_polygon(path, rect),
             ))
 
     doc.close()
