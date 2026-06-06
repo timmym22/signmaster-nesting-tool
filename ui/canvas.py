@@ -112,6 +112,45 @@ def compute_fit_scale(canvas_widget, sheet_w_in, sheet_h_in):
     return max(2.0, min(scale_w, scale_h))
 
 
+# ── Source-PDF preview helpers ──────────────────────────────────────────────
+
+def pdf_page_count(source_pdf):
+    """Number of pages in the source PDF (0 if it cannot be opened)."""
+    try:
+        doc = fitz.open(source_pdf)
+        n = len(doc)
+        doc.close()
+        return n
+    except Exception:
+        return 0
+
+
+def pdf_page_size_in(source_pdf, page_index):
+    """(width_in, height_in) of a source page, or (48, 96) on failure."""
+    try:
+        doc = fitz.open(source_pdf)
+        page = doc[page_index]
+        w_in, h_in = page.rect.width / 72.0, page.rect.height / 72.0
+        doc.close()
+        return w_in, h_in
+    except Exception:
+        return 48.0, 96.0
+
+
+def render_pdf_page(source_pdf, page_index, scale):
+    """Render a raw source-PDF page to a PIL RGB image at the given scale
+    (pixels per inch). Returns (image, (width_in, height_in))."""
+    doc = fitz.open(source_pdf)
+    page = doc[page_index]
+    zoom = scale / 72.0
+    mat = fitz.Matrix(zoom, zoom)
+    pix = page.get_pixmap(matrix=mat, alpha=False)
+    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+    size_in = (page.rect.width / 72.0, page.rect.height / 72.0)
+    doc.close()
+    return img, size_in
+
+
 def display_image_on_canvas(canvas_widget, pil_image, tk_image_ref):
     photo = ImageTk.PhotoImage(pil_image)
     tk_image_ref[0] = photo

@@ -12,7 +12,8 @@
       "Read(//c/Users/timmy/**)",
       "Read(//c/Users/timmy/Downloads/**)",
       "Bash(git --no-pager diff ui/toolbar.py)",
-      "Bash(git --no-pager diff core/exporter.py)"
+      "Bash(git --no-pager diff core/exporter.py)",
+      "Bash(powershell *)"
     ]
   }
 }

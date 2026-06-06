@@ -3,15 +3,18 @@
 # Knows about all the other modules but does not contain
 # any PDF reading, nesting, or drawing logic itself.
 
+import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from PIL import Image, ImageTk
 
 from core.extractor import extract_shapes
 from core.nester    import nest_shapes, SHEET_W_IN, SHEET_H_IN
 from core.exporter  import export_pdf
 from ui.toolbar     import build_toolbar
 from ui.canvas      import (render_sheet, compute_fit_scale,
-                            display_image_on_canvas, CANVAS_BG)
+                            display_image_on_canvas, CANVAS_BG,
+                            render_pdf_page, pdf_page_count, pdf_page_size_in)
 
 
 class NestingApp:
@@ -23,13 +26,25 @@ class NestingApp:
         self.root.geometry("1200x850")
         self.root.configure(bg="#f0f0f0")
 
+        # Window icon (SM mark) — optional, skip gracefully if missing
+        try:
+            _icon_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "assets", "icon.png")
+            self._icon_img = ImageTk.PhotoImage(Image.open(_icon_path))
+            self.root.iconphoto(True, self._icon_img)
+        except Exception:
+            pass
+
         # ── Application state ─────────────────────────────────────────────────
-        self.source_pdf    = None
-        self.shapes        = []
-        self.sheets        = []
-        self.current_sheet = 0
-        self.scale         = 8.0
-        self.tk_image_ref  = [None]
+        self.source_pdf        = None
+        self.shapes            = []
+        self.sheets            = []
+        self.current_sheet     = 0
+        self.scale             = 8.0
+        self.tk_image_ref      = [None]
+        self.mode              = None    # "preview" (source pages) or "nested"
+        self.source_page_count = 0
 
         # ── Build UI ──────────────────────────────────────────────────────────
         self.refs = build_toolbar(
@@ -98,6 +113,15 @@ class NestingApp:
         except ValueError:
             return 0.25
 
+    # ── How many views in the current mode (sheets or source pages) ────────────
+
+    def _view_count(self):
+        if self.mode == "nested":
+            return len(self.sheets)
+        if self.mode == "preview":
+            return self.source_page_count
+        return 0
+
     # ── Actions ───────────────────────────────────────────────────────────────
 
     def load_pdf(self):
@@ -127,15 +151,21 @@ class NestingApp:
             self.status_var.set("No shapes found.")
             return
 
-        self.source_pdf    = path
-        self.sheets        = []
-        self.current_sheet = 0
-        self.sheet_label.set("")
+        self.source_pdf        = path
+        self.sheets            = []
+        self.mode              = "preview"
+        self.source_page_count = max(1, pdf_page_count(path))
+        self.current_sheet     = 0
         self.usage_label.set("")
-        self.canvas.delete("all")
+
+        self._fit_current()
+        self._render_current()
+
+        pages = self.source_page_count
         self.status_var.set(
-            f"Loaded {len(self.shapes)} shapes.  "
-            f"Click 'Nest Shapes' to arrange."
+            f"Loaded {len(self.shapes)} shapes from "
+            f"{pages} page{'s' if pages != 1 else ''}.  "
+            f"Previewing source — click 'Nest Shapes' to arrange."
         )
 
     def run_nest(self):
@@ -161,6 +191,7 @@ class NestingApp:
             method        = method,
         )
 
+        self.mode          = "nested"
         self.current_sheet = 0
         total        = len(self.sheets)
         total_shapes = sum(len(s) for s in self.sheets)
@@ -171,8 +202,8 @@ class NestingApp:
             f"Rotation: {rotation_display}  ·  Method: {method}"
         )
 
-        self.scale = compute_fit_scale(self.canvas, SHEET_W_IN, SHEET_H_IN)
-        self.show_sheet()
+        self._fit_current()
+        self._render_current()
 
     def export_pdf(self):
         if not self.sheets:
@@ -215,38 +246,53 @@ class NestingApp:
             f"({num_shapes} shapes) to:\n\n{out_path}",
         )
 
-    # ── Sheet navigation ──────────────────────────────────────────────────────
+    # ── Sheet / page navigation ────────────────────────────────────────────────
 
     def prev_sheet(self):
-        if self.sheets and self.current_sheet > 0:
+        if self._view_count() and self.current_sheet > 0:
             self.current_sheet -= 1
-            self.show_sheet()
+            self._fit_current()
+            self._render_current()
 
     def next_sheet(self):
-        if self.sheets and self.current_sheet < len(self.sheets) - 1:
+        if self._view_count() and self.current_sheet < self._view_count() - 1:
             self.current_sheet += 1
-            self.show_sheet()
+            self._fit_current()
+            self._render_current()
 
     # ── Zoom ──────────────────────────────────────────────────────────────────
 
     def zoom_in(self):
         self.scale = min(self.scale + 1, 20)
-        self.show_sheet()
+        self._render_current()
 
     def zoom_out(self):
         self.scale = max(self.scale - 1, 2)
-        self.show_sheet()
+        self._render_current()
 
     def zoom_fit(self):
-        self.scale = compute_fit_scale(self.canvas, SHEET_W_IN, SHEET_H_IN)
-        self.show_sheet()
+        self._fit_current()
+        self._render_current()
 
     # ── Rendering ─────────────────────────────────────────────────────────────
 
-    def show_sheet(self):
+    def _fit_current(self):
+        """Set self.scale to fit the current view (nested sheet or source page)."""
+        if self.mode == "preview" and self.source_pdf:
+            w_in, h_in = pdf_page_size_in(self.source_pdf, self.current_sheet)
+            self.scale = compute_fit_scale(self.canvas, w_in, h_in)
+        else:
+            self.scale = compute_fit_scale(self.canvas, SHEET_W_IN, SHEET_H_IN)
+
+    def _render_current(self):
+        if self.mode == "nested":
+            self._render_nested()
+        elif self.mode == "preview":
+            self._render_preview()
+
+    def _render_nested(self):
         if not self.sheets:
             return
-
         placed = self.sheets[self.current_sheet]
         total  = len(self.sheets)
 
@@ -257,20 +303,25 @@ class NestingApp:
             scale         = self.scale,
             source_pdf    = self.source_pdf,
         )
-
         self.tk_image_ref = display_image_on_canvas(
             self.canvas, img, self.tk_image_ref)
+        self.sheet_label.set(f"Sheet {self.current_sheet + 1} of {total}")
+        self.usage_label.set(f"{len(placed)} shapes  |  {usage:.1f}% usage")
 
-        self.sheet_label.set(
-            f"Sheet {self.current_sheet + 1} of {total}")
-        self.usage_label.set(
-            f"{len(placed)} shapes  |  {usage:.1f}% usage")
+    def _render_preview(self):
+        if not self.source_pdf:
+            return
+        total = self.source_page_count
+        img, _ = render_pdf_page(self.source_pdf, self.current_sheet, self.scale)
+        self.tk_image_ref = display_image_on_canvas(
+            self.canvas, img, self.tk_image_ref)
+        self.sheet_label.set(f"Source page {self.current_sheet + 1} of {total}")
+        self.usage_label.set(f"{len(self.shapes)} shapes loaded")
 
     def _on_resize(self, event):
-        if self.sheets:
-            self.scale = compute_fit_scale(
-                self.canvas, SHEET_W_IN, SHEET_H_IN)
-            self.show_sheet()
+        if self.mode:
+            self._fit_current()
+            self._render_current()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
