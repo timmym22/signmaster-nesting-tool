@@ -53,8 +53,13 @@ class NestingApp:
         self._img_h           = 0
         self._img_ox          = 0
         self._img_oy          = 0
+        self._img_id          = None   # canvas image item (reused to avoid flicker)
+        self._cvw             = 1170   # cached canvas viewport size (avoids per-tick repaint)
+        self._cvh             = 760
         self._pending_zoom    = None
         self._zoom_focus      = None
+        self._base_img        = None   # last crisp-rendered PIL image
+        self._base_scale      = None   # the scale it was rendered at
 
         # ── Build UI ──────────────────────────────────────────────────────────
         self.refs = build_toolbar(
@@ -310,6 +315,16 @@ class NestingApp:
             factor = 1.0 / 1.15
         self.scale = min(max(self.scale * factor, ZOOM_MIN), ZOOM_MAX)
 
+        # Instant feedback: scale the last crisp bitmap to the new zoom and show
+        # it right away (cheap), so scrolling glides instead of jumping. The
+        # sharp re-render lands after scrolling settles.
+        if self._base_img is not None and self._base_scale:
+            ratio = self.scale / self._base_scale
+            nw = max(1, int(round(self._base_img.width * ratio)))
+            nh = max(1, int(round(self._base_img.height * ratio)))
+            preview = self._base_img.resize((nw, nh), Image.BILINEAR)
+            self._display(preview, focus=self._zoom_focus, update_base=False)
+
         if self._pending_zoom is not None:
             self.root.after_cancel(self._pending_zoom)
         self._pending_zoom = self.root.after(120, self._do_zoom_render)
@@ -343,27 +358,34 @@ class NestingApp:
         else:
             self.scale = compute_fit_scale(self.canvas, SHEET_W_IN, SHEET_H_IN)
 
-    def _display(self, img, focus=None):
+    def _display(self, img, focus=None, update_base=True):
         """Place a PIL image on the canvas, centered when it is smaller than the
         viewport (via a draw offset) and scrollable when larger. If
         focus=(vx,vy,fx,fy), scroll so image fraction (fx,fy) sits under viewport
-        point (vx,vy) — zoom-to-cursor."""
+        point (vx,vy) — zoom-to-cursor. When update_base is True the image is
+        cached as the crisp base used for fast wheel-zoom previews."""
+        if update_base:
+            self._base_img = img
+            self._base_scale = self.scale
         photo = ImageTk.PhotoImage(img)
         self.tk_image_ref[0] = photo          # keep a reference alive
-        self.canvas.delete("all")
-        self.canvas.update_idletasks()
 
-        vw = self.canvas.winfo_width()
-        vh = self.canvas.winfo_height()
-        if vw <= 1:
-            vw = 1170          # window not laid out yet — sensible fallback
-        if vh <= 1:
-            vh = 760
+        # Use the cached viewport size (updated on resize) so the zoom path never
+        # forces a synchronous repaint — that forced repaint is what made the
+        # un-double-buffered Windows canvas flash black on every wheel tick.
+        vw = self._cvw
+        vh = self._cvh
 
         w, h = img.width, img.height
         ox = max((vw - w) // 2, 10)           # center small images; 10px margin if larger
         oy = max((vh - h) // 2, 10)
-        self.canvas.create_image(ox, oy, anchor="nw", image=photo)
+        # Reuse a single canvas image item (swap picture + position in place)
+        # instead of delete+recreate, so rapid wheel zoom does not flicker black.
+        if self._img_id is None:
+            self._img_id = self.canvas.create_image(ox, oy, anchor="nw", image=photo)
+        else:
+            self.canvas.itemconfig(self._img_id, image=photo)
+            self.canvas.coords(self._img_id, ox, oy)
 
         region_w = w + 2 * ox
         region_h = h + 2 * oy
@@ -411,6 +433,12 @@ class NestingApp:
         self.usage_label.set(f"{len(self.shapes)} shapes loaded")
 
     def _on_resize(self, event):
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w > 1:
+            self._cvw = w
+        if h > 1:
+            self._cvh = h
         if self.mode:
             self._fit_current()
             self._render_current()
