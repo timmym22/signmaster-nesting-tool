@@ -216,11 +216,11 @@ def _pack_sheet(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode):
     return placed, unplaced
 
 
-def _build_candidate_positions(sheet_w, sheet_h, padding, spacing, shape, placed_polys):
+def _build_candidate_positions(sheet_w, sheet_h, padding, spacing, shape, placed_polys, rotation_mode="none/180"):
     """
-    Generate candidate positions using snap points from placed shapes.
-    Prioritizes bottom-of-sheet first, fills left-to-right within each row,
-    sorted by distance from horizontal center within each y level.
+    Generate candidate positions using bounding box snap points from
+    already-placed shapes. Fast and reliable baseline.
+    Sorted bottom-to-top, centered horizontally within each y level.
     """
     x_snaps = set()
     y_snaps = set()
@@ -281,6 +281,31 @@ def _rotate_polygon_180(contour_polygon):
     return ShapelyPolygon(coords)
 
 
+def _compute_nfp_candidates(placed_poly, new_poly, spacing):
+    """
+    Compute candidate positions where new_poly just touches placed_poly
+    by using the placed polygon's buffered exterior vertices directly.
+    Much faster than interpolation — uses only actual vertex points.
+    Returns a list of (x, y) offset positions.
+    """
+    try:
+        buffered  = placed_poly.buffer(spacing)
+        new_bounds = new_poly.bounds
+        ref_x = new_bounds[0]
+        ref_y = new_bounds[1]
+
+        candidates = []
+        # Use the actual vertices of the buffered boundary — no interpolation
+        coords = list(buffered.exterior.coords)
+        for (px, py) in coords:
+            cx = px - ref_x
+            cy = py - ref_y
+            candidates.append((cx, cy))
+        return candidates
+    except Exception:
+        return []
+
+
 def _shapes_overlap(poly_a, poly_b, spacing):
     """
     Return True if poly_a and poly_b overlap or are within spacing inches of each other.
@@ -292,11 +317,9 @@ def _shapes_overlap(poly_a, poly_b, spacing):
 def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode="none/180"):
     """
     Pack shapes onto one sheet using a two-pass strategy:
-    Pass 1 — greedy row fill: build rows from the bottom up, filling each
+    Pass 1 — row fill: build rows from the bottom up, filling each
               row left-to-right before starting a new row above it.
-    Pass 2 — gap fill: try to fit any remaining unplaced shapes into gaps
-              left by pass 1 using snap-point candidates.
-    Falls back to bounding-box rectangle for shapes without contour_polygon.
+    Pass 2 — gap fill: fit remaining shapes into gaps using snap points.
     Returns (placed, unplaced).
     """
     placed_polys = []
@@ -324,7 +347,7 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing, rotation_mod
         ])
 
     def try_place(shape, cx, cy, rotate180=False):
-        poly = make_poly(shape, cx, cy, rotate180=rotate180)
+        poly = make_poly(shape, cx, cy, rotate180)
         if not sheet_poly.contains(poly):
             return None
         for pp in placed_polys:
@@ -332,35 +355,31 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing, rotation_mod
                 return None
         return poly
 
-    # ── Pass 1: row-based fill bottom to top ─────────────────────────────────
-    current_y    = sheet_h - padding  # start at bottom
-    unplaced     = []
+    # ── Pass 1: row-based fill bottom to top ──────────────────────────────
+    current_y = sheet_h - padding
+    unplaced  = []
 
     while remaining:
-        # Find the tallest shape that fits from remaining to set row height
-        row_shapes   = []
-        row_height   = 0
-        still_remaining = []
+        row_height    = 0
+        placed_in_row = []
+        current_x     = padding
 
-        # Try to build a row: scan remaining shapes, place them left to right
-        current_x = padding
         row_candidates = list(remaining)
-
-        # Sort by height descending to set row height with tallest first
         row_candidates.sort(key=lambda s: s.height_in, reverse=True)
 
-        placed_in_row = []
         for shape in row_candidates:
             if current_x + shape.width_in + spacing > sheet_w - padding:
                 continue
             place_y = current_y - shape.height_in
             if place_y < padding:
                 continue
-            poly = try_place(shape, current_x, place_y, rotate180=False)
+
+            poly      = try_place(shape, current_x, place_y, rotate180=False)
             rotate180 = False
             if poly is None and rotation_mode == "none/180":
-                poly = try_place(shape, current_x, place_y, rotate180=True)
+                poly      = try_place(shape, current_x, place_y, rotate180=True)
                 rotate180 = True
+
             if poly is not None:
                 placed_in_row.append((shape, current_x, place_y, poly, rotate180))
                 current_x += shape.width_in + spacing
@@ -370,52 +389,51 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing, rotation_mod
         if not placed_in_row:
             break
 
-        # Commit the row — center it horizontally
         row_width = current_x - spacing - padding
         x_offset  = (sheet_w - row_width - padding) / 2.0
 
         for (shape, rx, ry, poly, rotate180) in placed_in_row:
             centered_x = rx + x_offset - padding
             centered_x = max(padding, min(centered_x, sheet_w - padding - shape.width_in))
-            final_poly = try_place(shape, centered_x, ry)
+            final_poly = try_place(shape, centered_x, ry, rotate180)
             if final_poly is None:
                 final_poly = poly
                 centered_x = rx
 
             placed_polys.append(final_poly)
             placed.append(PlacedShape(
-                shape       = shape,
-                x_in        = centered_x,
-                y_in        = ry,
-                sheet_index = 0,
-                rotated     = rotate180,
+                shape        = shape,
+                x_in         = centered_x,
+                y_in         = ry,
+                sheet_index  = 0,
+                rotated      = rotate180,
                 rotation_deg = 180.0 if rotate180 else 0.0,
             ))
             remaining.remove(shape)
 
         current_y -= row_height + spacing
 
-    # ── Pass 2: gap fill with snap points ────────────────────────────────────
+    # ── Pass 2: gap fill with snap points ─────────────────────────────────
     still_unplaced = []
     for shape in remaining:
         candidates = _build_candidate_positions(
-            sheet_w, sheet_h, padding, spacing, shape, placed_polys)
+            sheet_w, sheet_h, padding, spacing, shape, placed_polys, rotation_mode)
 
         placed_this = False
         for (cx, cy) in candidates:
-            poly = try_place(shape, cx, cy, rotate180=False)
+            poly      = try_place(shape, cx, cy, rotate180=False)
             rotate180 = False
             if poly is None and rotation_mode == "none/180":
-                poly = try_place(shape, cx, cy, rotate180=True)
+                poly      = try_place(shape, cx, cy, rotate180=True)
                 rotate180 = True
             if poly is not None:
                 placed_polys.append(poly)
                 placed.append(PlacedShape(
-                    shape       = shape,
-                    x_in        = cx,
-                    y_in        = cy,
-                    sheet_index = 0,
-                    rotated     = rotate180,
+                    shape        = shape,
+                    x_in         = cx,
+                    y_in         = cy,
+                    sheet_index  = 0,
+                    rotated      = rotate180,
                     rotation_deg = 180.0 if rotate180 else 0.0,
                 ))
                 placed_this = True
