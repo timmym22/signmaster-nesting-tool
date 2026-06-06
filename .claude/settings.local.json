@@ -2,7 +2,16 @@
   "permissions": {
     "allow": [
       "Bash(claude *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(xxd)",
+      "Bash(grep -n \"^def _pack_sheet_contour\\\\|^def nest_shapes\\\\|^    return sheets$\" core/nester.py)",
+      "Bash(git --no-pager diff core/nester.py)",
+      "Bash(git --no-pager diff --stat core/nester.py)",
+      "Bash(ls *.pdf)",
+      "Bash(ls 168283Test.pdf)",
+      "Read(//c/Users/timmy/**)",
+      "Read(//c/Users/timmy/Downloads/**)",
+      "Bash(git --no-pager diff ui/toolbar.py)"
     ]
   }
 }

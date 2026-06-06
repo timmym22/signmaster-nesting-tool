@@ -110,11 +110,11 @@ def build_toolbar(root, callbacks, defaults):
 
     tk.Label(method_row, text="Nesting Method:",
              bg=BG).pack(side="left")
-    method_var = tk.StringVar(value="contour")
+    method_var = tk.StringVar(value="nfp")
     tk.OptionMenu(
         method_row,
         method_var,
-        *["contour", "bounding box"],
+        *["nfp", "contour", "bounding box"],
     ).pack(side="left", padx=4)
     refs["method_var"] = method_var
 

@@ -7,6 +7,9 @@
 from models.shape import PlacedShape
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.prepared import prep
+from shapely.geometry import Polygon as _NFPPolygon
+from shapely.ops import unary_union as _nfp_unary_union
+from shapely import affinity as _nfp_affinity
 
 # ── Sheet defaults ────────────────────────────────────────────────────────────
 
@@ -476,6 +479,9 @@ def nest_shapes(shapes,
     Returns:
         A list of sheets, each a list of PlacedShape objects.
     """
+    if method == "nfp":
+        return _nest_nfp(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode)
+
     remaining = sorted(shapes,
                        key=lambda s: s.area(),
                        reverse=True)
@@ -501,3 +507,362 @@ def nest_shapes(shapes,
             break
 
     return sheets
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: No-Fit-Polygon generator (Minkowski-sum method via Shapely).
+# DORMANT — not yet wired into the nesting pipeline. Do not call from
+# placement code until Phase 3 Step 2.
+#
+# NFP(A, B) = A (+) (-B), the Minkowski sum of A with B reflected through the
+# origin. Place B's reference point (its lower-left / first exterior coord)
+# ON or OUTSIDE the returned region to guarantee B does not overlap A.
+# Inside the region => overlap. Hole-aware: interior counters of A (e.g. the
+# center of an O, the bowls of a B) become interior voids of the NFP, so a
+# piece is allowed to nest inside another shape's counter.
+# ---------------------------------------------------------------------------
+
+def _nfp_reflect_origin(poly):
+    """Return -poly: poly reflected through the origin (180 deg point reflection)."""
+    return _NFPPolygon([(-x, -y) for x, y in poly.exterior.coords])
+
+
+def _nfp_minkowski_sum(A, B):
+    """
+    Minkowski sum A (+) B for simple, possibly concave polygons, hole-aware on A.
+    Computed by the vertex-sweep union method (robust via GEOS):
+      union of A translated to each vertex of B, plus B translated to each
+      vertex of every ring (exterior + interior) of A. Equals the Minkowski
+      sum for simple polygons and preserves interior voids from A's holes.
+    """
+    b_coords = list(B.exterior.coords)[:-1]
+    pieces = []
+    for bx, by in b_coords:
+        pieces.append(_nfp_affinity.translate(A, xoff=bx, yoff=by))
+    # exterior ring of A
+    for ax, ay in list(A.exterior.coords)[:-1]:
+        pieces.append(_nfp_affinity.translate(B, xoff=ax, yoff=ay))
+    # interior rings (holes) of A — keeps counter voids open in the result
+    for ring in A.interiors:
+        for ax, ay in list(ring.coords)[:-1]:
+            pieces.append(_nfp_affinity.translate(B, xoff=ax, yoff=ay))
+    return _nfp_unary_union(pieces)
+
+
+def compute_nfp(A, B, spacing=0.0, simplify_tol=0.05):
+    """
+    No-fit polygon of B around A. Both A and B are Shapely polygons in inches
+    (A may have interior holes). Returns a Shapely Polygon/MultiPolygon: B's
+    reference point must lie ON or OUTSIDE this region to avoid overlapping A.
+
+    spacing      : inflate the NFP by this clearance (inches) so "touching the
+                   boundary" means exactly one spacing-width gap between pieces.
+    simplify_tol : pre-simplify both polygons to cap vertex counts (curvy
+                   bezier-sampled contours can carry hundreds of points). 0.05"
+                   keeps shapes accurate while keeping the NFP bounded/fast.
+    """
+    if simplify_tol:
+        A = A.simplify(simplify_tol, preserve_topology=True)
+        B = B.simplify(simplify_tol, preserve_topology=True)
+    neg_b = _nfp_reflect_origin(B)
+    region = _nfp_minkowski_sum(A, neg_b)
+    if spacing:
+        region = region.buffer(spacing, join_style=2)
+    return region
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 3: TRUE NFP NESTING  (placement + compaction + backfill + keep-best)
+# Uses compute_nfp() (from Step 1). 180-flip uses the source_rect center so the
+# collision polygon stays aligned with the rotated thumbnail (canvas convention).
+# Wired as method="nfp" in nest_shapes; "contour" and "bbox" are unchanged.
+# ═══════════════════════════════════════════════════════════════════════════
+
+from shapely.geometry import box as _nfp_box, MultiPolygon as _NFPMulti
+from shapely.ops import unary_union as _nfp_union2
+from shapely import affinity as _nfp_aff2
+
+_NFP_PAIR_CACHE = {}
+
+
+def _nfp_local_poly(shape, rot180):
+    """Local contour polygon for a shape (hole-aware), 180-flipped around the
+    source_rect center when rot180 so it stays aligned with the thumbnail."""
+    poly = shape.contour_polygon
+    if poly is None:
+        return ShapelyPolygon([(0, 0), (shape.width_in, 0),
+                               (shape.width_in, shape.height_in),
+                               (0, shape.height_in)])
+    if rot180:
+        rw = shape.source_rect.width / 72.0
+        rh = shape.source_rect.height / 72.0
+        cx, cy = rw / 2.0, rh / 2.0
+        ext = [(2 * cx - px, 2 * cy - py) for px, py in poly.exterior.coords]
+        ints = [[(2 * cx - px, 2 * cy - py) for px, py in r.coords]
+                for r in poly.interiors]
+        return ShapelyPolygon(ext, ints)
+    return poly
+
+
+def _nfp_pair(keyA, polyA, keyB, polyB, spacing):
+    """Cached NFP of B around A (A at origin)."""
+    k = (keyA, keyB)
+    cached = _NFP_PAIR_CACHE.get(k)
+    if cached is not None:
+        return cached
+    region = compute_nfp(polyA, polyB, spacing=spacing, simplify_tol=0.05)
+    _NFP_PAIR_CACHE[k] = region
+    return region
+
+
+def _nfp_region_vertices(geom):
+    pts = []
+    if geom.is_empty:
+        return pts
+    polys = geom.geoms if isinstance(geom, _NFPMulti) else [geom]
+    for p in polys:
+        pts.extend(list(p.exterior.coords))
+        for r in p.interiors:
+            pts.extend(list(r.coords))
+    return pts
+
+
+def _nfp_candidates(local_poly, nfp_union, sheet_w, sheet_h, padding):
+    """Bottom-most-then-leftmost-sorted candidate (x,y) translations for a shape
+    whose local polygon is local_poly, given the union of placed NFPs."""
+    b = local_poly.bounds
+    tx_lo, tx_hi = padding - b[0], sheet_w - padding - b[2]
+    ty_lo, ty_hi = padding - b[1], sheet_h - padding - b[3]
+    if tx_lo > tx_hi or ty_lo > ty_hi:
+        return []
+    ifr = _nfp_box(tx_lo, ty_lo, tx_hi, ty_hi)
+    valid = ifr if (nfp_union is None or nfp_union.is_empty) \
+        else ifr.difference(nfp_union)
+    if valid.is_empty:
+        return []
+    out = []
+    for (x, y) in _nfp_region_vertices(valid):
+        if x < tx_lo - 1e-6 or x > tx_hi + 1e-6 or y < ty_lo - 1e-6 or y > ty_hi + 1e-6:
+            continue
+        out.append((-y, x, x, y))   # sort key: max y (bottom), then min x (left)
+    out.sort()
+    return [(x, y) for _, _, x, y in out]
+
+
+def _nfp_exact_ok(local_poly, x, y, placed_prep, placed_bounds, spacing):
+    """Real-contour validation: reject if the placed shape would actually
+    intersect any placed shape (guards against NFP simplification slack)."""
+    cand = ShapelyPolygon([(px + x, py + y) for px, py in local_poly.exterior.coords],
+                          [[(px + x, py + y) for px, py in r.coords]
+                           for r in local_poly.interiors])
+    cbuf = cand.buffer(spacing / 2.0)
+    cb = cbuf.bounds
+    for i in range(len(placed_prep)):
+        pb = placed_bounds[i]
+        if cb[2] <= pb[0] or cb[0] >= pb[2] or cb[3] <= pb[1] or cb[1] >= pb[3]:
+            continue
+        if placed_prep[i].intersects(cbuf):
+            return False
+    return True
+
+
+def _nfp_place_guarded(local_poly, nfp_union, placed_prep, placed_bounds,
+                       sheet_w, sheet_h, padding, spacing):
+    for (x, y) in _nfp_candidates(local_poly, nfp_union, sheet_w, sheet_h, padding):
+        if _nfp_exact_ok(local_poly, x, y, placed_prep, placed_bounds, spacing):
+            return (x, y)
+    return None
+
+
+def _translate_geom(geom, dx, dy):
+    return _nfp_aff2.translate(geom, xoff=dx, yoff=dy)
+
+
+def _nfp_union_against(placed, rk, local_poly, spacing):
+    if not placed:
+        return None
+    parts = []
+    for p in placed:
+        region = _nfp_pair(p["rk"], p["local"], rk, local_poly, spacing)
+        parts.append(_translate_geom(region, p["x"], p["y"]))
+    return _nfp_union2(parts)
+
+
+def _nfp_prep_for(local_poly, x, y, spacing):
+    cand = ShapelyPolygon([(px + x, py + y) for px, py in local_poly.exterior.coords],
+                          [[(px + x, py + y) for px, py in r.coords]
+                           for r in local_poly.interiors])
+    g = cand.buffer(spacing / 2.0)
+    return prep(g), g.bounds
+
+
+def _nfp_fill_sheet(remaining, sheet_w, sheet_h, padding, spacing, rotation_mode):
+    placed, pre, bnd, leftover = [], [], [], []
+    for (key, shape) in remaining:
+        best = None
+        for rot in ([False, True] if rotation_mode == "none/180" else [False]):
+            local = _nfp_local_poly(shape, rot)
+            rk = (key, rot)
+            u = _nfp_union_against(placed, rk, local, spacing)
+            pos = _nfp_place_guarded(local, u, pre, bnd, sheet_w, sheet_h, padding, spacing)
+            if pos is None:
+                continue
+            x, y = pos
+            k = (-y, x, 0 if not rot else 1)
+            if best is None or k < best[0]:
+                best = (k, x, y, rot, local, rk)
+        if best is None:
+            leftover.append((key, shape))
+            continue
+        _, x, y, rot, local, rk = best
+        placed.append({"key": key, "shape": shape, "x": x, "y": y,
+                       "rot": rot, "local": local, "rk": rk})
+        p, b = _nfp_prep_for(local, x, y, spacing)
+        pre.append(p); bnd.append(b)
+    return placed, pre, bnd, leftover
+
+
+def _nfp_compact(placed, pre, bnd, sheet_w, sheet_h, padding, spacing, passes=8):
+    for _ in range(passes):
+        moved = 0.0
+        order = sorted(range(len(placed)), key=lambda i: -placed[i]["y"])
+        for i in order:
+            me = placed[i]
+            opre = [pre[j] for j in range(len(placed)) if j != i]
+            obnd = [bnd[j] for j in range(len(placed)) if j != i]
+            others = [placed[j] for j in range(len(placed)) if j != i]
+            u = _nfp_union_against(others, me["rk"], me["local"], spacing)
+            pos = _nfp_place_guarded(me["local"], u, opre, obnd,
+                                     sheet_w, sheet_h, padding, spacing)
+            if pos:
+                nx, ny = pos
+                if (ny > me["y"] + 1e-4) or (abs(ny - me["y"]) <= 1e-4 and nx < me["x"] - 1e-4):
+                    moved += abs(nx - me["x"]) + abs(ny - me["y"])
+                    me["x"], me["y"] = nx, ny
+                    p, b = _nfp_prep_for(me["local"], nx, ny, spacing)
+                    pre[i] = p; bnd[i] = b
+        if moved < 1e-3:
+            break
+    return placed, pre, bnd
+
+
+def _pack_sheet_nfp_once(remaining, sheet_w, sheet_h, padding, spacing, rotation_mode):
+    placed, pre, bnd, leftover = _nfp_fill_sheet(
+        remaining, sheet_w, sheet_h, padding, spacing, rotation_mode)
+    if not placed:
+        return placed, leftover
+    for _ in range(4):
+        placed, pre, bnd = _nfp_compact(
+            placed, pre, bnd, sheet_w, sheet_h, padding, spacing)
+        added = False
+        while leftover:
+            best = None
+            for ri, (key, shape) in enumerate(leftover):
+                for rot in ([False, True] if rotation_mode == "none/180" else [False]):
+                    local = _nfp_local_poly(shape, rot)
+                    rk = (key, rot)
+                    u = _nfp_union_against(placed, rk, local, spacing)
+                    pos = _nfp_place_guarded(local, u, pre, bnd,
+                                             sheet_w, sheet_h, padding, spacing)
+                    if pos is None:
+                        continue
+                    x, y = pos
+                    k = (-y, x, 0 if not rot else 1)
+                    if best is None or k < best[0]:
+                        best = (k, ri, x, y, rot, local, rk)
+            if best is None:
+                break
+            _, ri, x, y, rot, local, rk = best
+            key, shape = leftover.pop(ri)
+            placed.append({"key": key, "shape": shape, "x": x, "y": y,
+                           "rot": rot, "local": local, "rk": rk})
+            p, b = _nfp_prep_for(local, x, y, spacing)
+            pre.append(p); bnd.append(b)
+            added = True
+        if not added:
+            break
+    return placed, leftover
+
+
+def _nfp_full_run(keyed, sheet_w, sheet_h, padding, spacing, rotation_mode):
+    sheets = []
+    remaining = list(keyed)
+    while remaining:
+        placed, leftover = _pack_sheet_nfp_once(
+            remaining, sheet_w, sheet_h, padding, spacing, rotation_mode)
+        if not placed:
+            break
+        sheets.append(placed)
+        remaining = leftover
+    return sheets
+
+
+def _nfp_last_density(sheets, sheet_w, sheet_h):
+    if not sheets:
+        return 0.0
+    last = sheets[-1]
+    used = sum(_nfp_aff2.translate(p["local"], xoff=p["x"], yoff=p["y"]).area for p in last)
+    return used / (sheet_w * sheet_h) * 100.0
+
+
+def _nest_nfp(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode):
+    """Deterministic keep-best over several sort orders; returns list[list[PlacedShape]]."""
+    _NFP_PAIR_CACHE.clear()
+    base = [(i, s) for i, s in enumerate(shapes)]
+
+    def _perim(s):
+        return s.contour_polygon.length if s.contour_polygon else 0.0
+
+    def _carea(s):
+        return s.contour_polygon.area if s.contour_polygon else s.area()
+
+    # A dozen DETERMINISTIC orderings (no RNG, reproducible across machines).
+    # Irregular-nesting packing is sensitively dependent on float/GEOS jitter,
+    # so we try many orderings and keep the best; speed is not a concern.
+    sort_keys = [
+        lambda ks: -max(ks[1].width_in, ks[1].height_in),
+        lambda ks: -ks[1].area(),
+        lambda ks: -ks[1].height_in,
+        lambda ks: -ks[1].width_in,
+        lambda ks: -_perim(ks[1]),
+        lambda ks: -min(ks[1].width_in, ks[1].height_in),
+        lambda ks: -(ks[1].area() * ks[1].height_in),
+        lambda ks: (-round(ks[1].height_in, 1), -ks[1].width_in),
+        lambda ks: (-round(ks[1].width_in, 1), -ks[1].height_in),
+        lambda ks: -_carea(ks[1]),
+        lambda ks: (-round(max(ks[1].width_in, ks[1].height_in), 1), -ks[1].area()),
+        lambda ks: (-round(_perim(ks[1]), 0), -ks[1].height_in),
+    ]
+    best = None
+    for key in sort_keys:
+        order = sorted(base, key=key)
+        sheets = _nfp_full_run(order, sheet_w, sheet_h, padding, spacing, rotation_mode)
+        score = (len(sheets), round(_nfp_last_density(sheets, sheet_w, sheet_h), 2))
+        if best is None or score < best[0]:
+            best = (score, sheets)
+    sheets = best[1]
+
+    # Convert to PlacedShape, with horizontal block-centering per sheet (x-only,
+    # overlap-safe) so scrap consolidates symmetrically; bottom-up keeps scrap on top.
+    result = []
+    for si, placed in enumerate(sheets):
+        if placed:
+            minx = min(p["x"] + p["local"].bounds[0] for p in placed)
+            maxx = max(p["x"] + p["local"].bounds[2] for p in placed)
+            block_w = maxx - minx
+            x_shift = (sheet_w - block_w) / 2.0 - minx
+        else:
+            x_shift = 0.0
+        sheet_list = []
+        for p in placed:
+            nx = p["x"] + x_shift
+            sheet_list.append(PlacedShape(
+                shape=p["shape"],
+                x_in=nx,
+                y_in=p["y"],
+                sheet_index=si,
+                rotated=p["rot"],
+                rotation_deg=180.0 if p["rot"] else 0.0,
+            ))
+        result.append(sheet_list)
+    return result
