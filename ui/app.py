@@ -47,7 +47,7 @@ class NestingApp:
             defaults={
                 "spacing":  0.1969,
                 "padding":  0.25,
-                "rotation": "none/180",
+                "rotation": "0/180",
             },
         )
 
@@ -146,7 +146,9 @@ class NestingApp:
         self.status_var.set("Nesting shapes…")
         self.root.update_idletasks()
 
-        rotation_mode = self.refs["rotation_var"].get()
+        rotation_display = self.refs["rotation_var"].get()
+        # UI shows "0/180"; the nester's internal mode name is "none/180".
+        rotation_mode = "none/180" if rotation_display == "0/180" else rotation_display
         method = self.refs["method_var"].get()
 
         self.sheets = nest_shapes(
@@ -166,7 +168,7 @@ class NestingApp:
         self.status_var.set(
             f"{total_shapes} shapes arranged across "
             f"{total} sheet{'s' if total != 1 else ''}  ·  "
-            f"Rotation: {rotation_mode}  ·  Method: {method}"
+            f"Rotation: {rotation_display}  ·  Method: {method}"
         )
 
         self.scale = compute_fit_scale(self.canvas, SHEET_W_IN, SHEET_H_IN)

@@ -84,11 +84,11 @@ def build_toolbar(root, callbacks, defaults):
     # ── Rotation control ──────────────────────────────────────────────────────
     tk.Label(settings, text="Rotation:",
              bg=BG).pack(side="left", padx=(12, 0))
-    rotation_var = tk.StringVar(value=defaults.get("rotation", "none/180"))
+    rotation_var = tk.StringVar(value=defaults.get("rotation", "0/180"))
     rotation_menu = ttk.Combobox(
         settings,
         textvariable=rotation_var,
-        values=["none/180", "90°", "180°", "270°", "free"],
+        values=["0/180", "90°", "180°", "270°", "free"],
         state="readonly",
         width=8,
     )
@@ -98,7 +98,7 @@ def build_toolbar(root, callbacks, defaults):
     # Rotation legend
     tk.Label(
         settings,
-        text="(none/180 = flute-safe for Coroplast)",
+        text="(0/180 = flute-safe for Coroplast)",
         bg=BG,
         fg="#888888",
         font=("Arial", 8),
