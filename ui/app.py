@@ -47,7 +47,7 @@ class NestingApp:
             defaults={
                 "spacing":  0.1969,
                 "padding":  0.25,
-                "rotation": "none",
+                "rotation": "none/180",
             },
         )
 

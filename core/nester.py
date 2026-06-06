@@ -20,7 +20,7 @@ DEFAULT_SPACING_IN  = 0.1969
 # 180   — try original + 180° rotation
 # 270   — try original + 270° rotation
 # free  — try all four orientations, pick best fit
-ROTATION_MODES = ["none", "90°", "180°", "270°", "free"]
+ROTATION_MODES = ["none/180", "90°", "180°", "270°", "free"]
 
 
 # ── Free rectangle tracking ───────────────────────────────────────────────────
@@ -54,7 +54,7 @@ def _candidate_sizes(shape, rotation_mode):
     w = shape.width_in
     h = shape.height_in
 
-    if rotation_mode == "none":
+    if rotation_mode == "none/180":
         # No rotation — flute-safe for Coroplast
         return [(w, h, False)]
 
@@ -267,6 +267,20 @@ def _offset_polygon(contour_polygon, x_in, y_in):
     return ShapelyPolygon(coords)
 
 
+def _rotate_polygon_180(contour_polygon):
+    """
+    Rotate a contour polygon 180 degrees around its own center.
+    The polygon is in local inch coordinates with origin at (0,0).
+    Returns a new Shapely Polygon.
+    """
+    bounds = contour_polygon.bounds  # (minx, miny, maxx, maxy)
+    cx = (bounds[0] + bounds[2]) / 2.0
+    cy = (bounds[1] + bounds[3]) / 2.0
+    coords = [(2*cx - px, 2*cy - py)
+              for px, py in contour_polygon.exterior.coords]
+    return ShapelyPolygon(coords)
+
+
 def _shapes_overlap(poly_a, poly_b, spacing):
     """
     Return True if poly_a and poly_b overlap or are within spacing inches of each other.
@@ -275,7 +289,7 @@ def _shapes_overlap(poly_a, poly_b, spacing):
     return poly_a.intersects(buffered)
 
 
-def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing):
+def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode="none/180"):
     """
     Pack shapes onto one sheet using a two-pass strategy:
     Pass 1 — greedy row fill: build rows from the bottom up, filling each
@@ -296,9 +310,12 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing):
         (padding,           sheet_h - padding),
     ])
 
-    def make_poly(shape, cx, cy):
+    def make_poly(shape, cx, cy, rotate180=False):
         if shape.contour_polygon is not None:
-            return _offset_polygon(shape.contour_polygon, cx, cy)
+            poly = shape.contour_polygon
+            if rotate180:
+                poly = _rotate_polygon_180(poly)
+            return _offset_polygon(poly, cx, cy)
         return ShapelyPolygon([
             (cx,                  cy),
             (cx + shape.width_in, cy),
@@ -306,8 +323,8 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing):
             (cx,                  cy + shape.height_in),
         ])
 
-    def try_place(shape, cx, cy):
-        poly = make_poly(shape, cx, cy)
+    def try_place(shape, cx, cy, rotate180=False):
+        poly = make_poly(shape, cx, cy, rotate180=rotate180)
         if not sheet_poly.contains(poly):
             return None
         for pp in placed_polys:
@@ -339,9 +356,13 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing):
             place_y = current_y - shape.height_in
             if place_y < padding:
                 continue
-            poly = try_place(shape, current_x, place_y)
+            poly = try_place(shape, current_x, place_y, rotate180=False)
+            rotate180 = False
+            if poly is None and rotation_mode == "none/180":
+                poly = try_place(shape, current_x, place_y, rotate180=True)
+                rotate180 = True
             if poly is not None:
-                placed_in_row.append((shape, current_x, place_y, poly))
+                placed_in_row.append((shape, current_x, place_y, poly, rotate180))
                 current_x += shape.width_in + spacing
                 if shape.height_in > row_height:
                     row_height = shape.height_in
@@ -353,7 +374,7 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing):
         row_width = current_x - spacing - padding
         x_offset  = (sheet_w - row_width - padding) / 2.0
 
-        for (shape, rx, ry, poly) in placed_in_row:
+        for (shape, rx, ry, poly, rotate180) in placed_in_row:
             centered_x = rx + x_offset - padding
             centered_x = max(padding, min(centered_x, sheet_w - padding - shape.width_in))
             final_poly = try_place(shape, centered_x, ry)
@@ -367,7 +388,8 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing):
                 x_in        = centered_x,
                 y_in        = ry,
                 sheet_index = 0,
-                rotated     = False,
+                rotated     = rotate180,
+                rotation_deg = 180.0 if rotate180 else 0.0,
             ))
             remaining.remove(shape)
 
@@ -381,7 +403,11 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing):
 
         placed_this = False
         for (cx, cy) in candidates:
-            poly = try_place(shape, cx, cy)
+            poly = try_place(shape, cx, cy, rotate180=False)
+            rotate180 = False
+            if poly is None and rotation_mode == "none/180":
+                poly = try_place(shape, cx, cy, rotate180=True)
+                rotate180 = True
             if poly is not None:
                 placed_polys.append(poly)
                 placed.append(PlacedShape(
@@ -389,7 +415,8 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing):
                     x_in        = cx,
                     y_in        = cy,
                     sheet_index = 0,
-                    rotated     = False,
+                    rotated     = rotate180,
+                    rotation_deg = 180.0 if rotate180 else 0.0,
                 ))
                 placed_this = True
                 break
@@ -407,7 +434,7 @@ def nest_shapes(shapes,
                 sheet_h=SHEET_H_IN,
                 padding=DEFAULT_PADDING_IN,
                 spacing=DEFAULT_SPACING_IN,
-                rotation_mode="none",
+                rotation_mode="none/180",
                 method="contour"):
     """
     Arrange shapes onto as few sheets as possible.
@@ -433,7 +460,7 @@ def nest_shapes(shapes,
     while remaining:
         if method == "contour":
             placed, remaining = _pack_sheet_contour(
-                remaining, sheet_w, sheet_h, padding, spacing)
+                remaining, sheet_w, sheet_h, padding, spacing, rotation_mode)
         else:
             placed, remaining = _pack_sheet(
                 remaining, sheet_w, sheet_h,
