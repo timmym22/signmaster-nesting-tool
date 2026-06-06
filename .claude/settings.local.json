@@ -11,7 +11,8 @@
       "Bash(ls 168283Test.pdf)",
       "Read(//c/Users/timmy/**)",
       "Read(//c/Users/timmy/Downloads/**)",
-      "Bash(git --no-pager diff ui/toolbar.py)"
+      "Bash(git --no-pager diff ui/toolbar.py)",
+      "Bash(git --no-pager diff core/exporter.py)"
     ]
   }
 }

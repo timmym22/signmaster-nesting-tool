@@ -62,12 +62,18 @@ def export_pdf(source_pdf_path, sheets, output_path):
             dst_y1 = dst_y0 + shape.height_in * PTS_PER_IN
             dst_rect = fitz.Rect(dst_x0, dst_y0, dst_x1, dst_y1)
 
+            # Flip pieces the nester placed at 180 so the exported artwork
+            # matches the planned (interlocking) orientation. Rotation is around
+            # the dst_rect center, same as the preview's source_rect-center flip.
+            rotate_deg = 180 if getattr(ps, "rotation_deg", 0) == 180 else 0
+
             # Copy artwork from source, cropped to the shape bounding box
             out_page.show_pdf_page(
                 dst_rect,
                 src_doc,
                 src_page.number,
                 clip=src_rect,
+                rotate=rotate_deg,
             )
 
             total_shapes += 1
