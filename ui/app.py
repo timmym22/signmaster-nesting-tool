@@ -12,9 +12,11 @@ from core.extractor import extract_shapes
 from core.nester    import nest_shapes, SHEET_W_IN, SHEET_H_IN
 from core.exporter  import export_pdf
 from ui.toolbar     import build_toolbar
-from ui.canvas      import (render_sheet, compute_fit_scale,
-                            display_image_on_canvas, CANVAS_BG,
+from ui.canvas      import (render_sheet, compute_fit_scale, CANVAS_BG,
                             render_pdf_page, pdf_page_count, pdf_page_size_in)
+
+ZOOM_MIN = 2.0
+ZOOM_MAX = 40.0
 
 
 class NestingApp:
@@ -45,6 +47,14 @@ class NestingApp:
         self.tk_image_ref      = [None]
         self.mode              = None    # "preview" (source pages) or "nested"
         self.source_page_count = 0
+
+        # canvas display / interaction state
+        self._img_w           = 0
+        self._img_h           = 0
+        self._img_ox          = 0
+        self._img_oy          = 0
+        self._pending_zoom    = None
+        self._zoom_focus      = None
 
         # ── Build UI ──────────────────────────────────────────────────────────
         self.refs = build_toolbar(
@@ -87,6 +97,16 @@ class NestingApp:
         hbar.pack(side="bottom", fill="x")
         self.canvas.pack(fill="both", expand=True)
 
+        # Pan with left-click drag
+        self.canvas.bind("<ButtonPress-1>", self._pan_start)
+        self.canvas.bind("<B1-Motion>",     self._pan_move)
+        self.canvas.bind("<ButtonRelease-1>", self._pan_end)
+        # Zoom with mouse wheel (Windows / macOS deliver <MouseWheel>)
+        self.canvas.bind("<MouseWheel>", self._on_wheel)
+        # Linux delivers wheel as Button-4/5
+        self.canvas.bind("<Button-4>", self._on_wheel)
+        self.canvas.bind("<Button-5>", self._on_wheel)
+
     # ── Convenience properties ────────────────────────────────────────────────
 
     @property
@@ -112,8 +132,6 @@ class NestingApp:
             return float(self.refs["padding_var"].get())
         except ValueError:
             return 0.25
-
-    # ── How many views in the current mode (sheets or source pages) ────────────
 
     def _view_count(self):
         if self.mode == "nested":
@@ -260,19 +278,60 @@ class NestingApp:
             self._fit_current()
             self._render_current()
 
-    # ── Zoom ──────────────────────────────────────────────────────────────────
+    # ── Zoom (buttons) ──────────────────────────────────────────────────────────
 
     def zoom_in(self):
-        self.scale = min(self.scale + 1, 20)
+        self.scale = min(self.scale + 1, ZOOM_MAX)
         self._render_current()
 
     def zoom_out(self):
-        self.scale = max(self.scale - 1, 2)
+        self.scale = max(self.scale - 1, ZOOM_MIN)
         self._render_current()
 
     def zoom_fit(self):
         self._fit_current()
         self._render_current()
+
+    # ── Mouse wheel zoom (toward cursor, debounced) ─────────────────────────────
+
+    def _on_wheel(self, event):
+        if not self.mode:
+            return
+        if self._img_w and self._img_h:
+            cx = self.canvas.canvasx(event.x)
+            cy = self.canvas.canvasy(event.y)
+            fx = min(max((cx - self._img_ox) / self._img_w, 0.0), 1.0)
+            fy = min(max((cy - self._img_oy) / self._img_h, 0.0), 1.0)
+            self._zoom_focus = (event.x, event.y, fx, fy)
+
+        if getattr(event, "num", None) == 4 or getattr(event, "delta", 0) > 0:
+            factor = 1.15
+        else:
+            factor = 1.0 / 1.15
+        self.scale = min(max(self.scale * factor, ZOOM_MIN), ZOOM_MAX)
+
+        if self._pending_zoom is not None:
+            self.root.after_cancel(self._pending_zoom)
+        self._pending_zoom = self.root.after(120, self._do_zoom_render)
+        return "break"
+
+    def _do_zoom_render(self):
+        self._pending_zoom = None
+        focus = self._zoom_focus
+        self._zoom_focus = None
+        self._render_current(focus=focus)
+
+    # ── Pan (left-click drag) ──────────────────────────────────────────────────
+
+    def _pan_start(self, event):
+        self.canvas.scan_mark(event.x, event.y)
+        self.canvas.config(cursor="fleur")
+
+    def _pan_move(self, event):
+        self.canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def _pan_end(self, event):
+        self.canvas.config(cursor="crosshair")
 
     # ── Rendering ─────────────────────────────────────────────────────────────
 
@@ -284,13 +343,48 @@ class NestingApp:
         else:
             self.scale = compute_fit_scale(self.canvas, SHEET_W_IN, SHEET_H_IN)
 
-    def _render_current(self):
-        if self.mode == "nested":
-            self._render_nested()
-        elif self.mode == "preview":
-            self._render_preview()
+    def _display(self, img, focus=None):
+        """Place a PIL image on the canvas, centered when it is smaller than the
+        viewport (via a draw offset) and scrollable when larger. If
+        focus=(vx,vy,fx,fy), scroll so image fraction (fx,fy) sits under viewport
+        point (vx,vy) — zoom-to-cursor."""
+        photo = ImageTk.PhotoImage(img)
+        self.tk_image_ref[0] = photo          # keep a reference alive
+        self.canvas.delete("all")
+        self.canvas.update_idletasks()
 
-    def _render_nested(self):
+        vw = self.canvas.winfo_width()
+        vh = self.canvas.winfo_height()
+        if vw <= 1:
+            vw = 1170          # window not laid out yet — sensible fallback
+        if vh <= 1:
+            vh = 760
+
+        w, h = img.width, img.height
+        ox = max((vw - w) // 2, 10)           # center small images; 10px margin if larger
+        oy = max((vh - h) // 2, 10)
+        self.canvas.create_image(ox, oy, anchor="nw", image=photo)
+
+        region_w = w + 2 * ox
+        region_h = h + 2 * oy
+        self.canvas.configure(scrollregion=(0, 0, region_w, region_h))
+        self._img_w, self._img_h = w, h
+        self._img_ox, self._img_oy = ox, oy
+
+        if focus is not None and region_w and region_h:
+            vx, vy, fx, fy = focus
+            target_cx = ox + fx * w
+            target_cy = oy + fy * h
+            self.canvas.xview_moveto(min(max((target_cx - vx) / region_w, 0.0), 1.0))
+            self.canvas.yview_moveto(min(max((target_cy - vy) / region_h, 0.0), 1.0))
+
+    def _render_current(self, focus=None):
+        if self.mode == "nested":
+            self._render_nested(focus)
+        elif self.mode == "preview":
+            self._render_preview(focus)
+
+    def _render_nested(self, focus=None):
         if not self.sheets:
             return
         placed = self.sheets[self.current_sheet]
@@ -303,18 +397,16 @@ class NestingApp:
             scale         = self.scale,
             source_pdf    = self.source_pdf,
         )
-        self.tk_image_ref = display_image_on_canvas(
-            self.canvas, img, self.tk_image_ref)
+        self._display(img, focus)
         self.sheet_label.set(f"Sheet {self.current_sheet + 1} of {total}")
         self.usage_label.set(f"{len(placed)} shapes  |  {usage:.1f}% usage")
 
-    def _render_preview(self):
+    def _render_preview(self, focus=None):
         if not self.source_pdf:
             return
         total = self.source_page_count
         img, _ = render_pdf_page(self.source_pdf, self.current_sheet, self.scale)
-        self.tk_image_ref = display_image_on_canvas(
-            self.canvas, img, self.tk_image_ref)
+        self._display(img, focus)
         self.sheet_label.set(f"Source page {self.current_sheet + 1} of {total}")
         self.usage_label.set(f"{len(self.shapes)} shapes loaded")
 
