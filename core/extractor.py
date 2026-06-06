@@ -52,29 +52,51 @@ def _is_cut_contour(color_tuple):
             PINK_B_MIN <= b <= PINK_B_MAX)
 
 
+def _sample_bezier(p0, p1, p2, p3, segments=8):
+    """
+    Sample points along a cubic bezier curve defined by four control points.
+    Each point is an (x, y) tuple. Returns 'segments' points along the curve,
+    not including the start point (which the caller already added).
+    """
+    pts = []
+    for i in range(1, segments + 1):
+        t  = i / segments
+        mt = 1 - t
+        x = (mt**3 * p0[0] + 3*mt**2*t * p1[0] +
+             3*mt*t**2 * p2[0] + t**3 * p3[0])
+        y = (mt**3 * p0[1] + 3*mt**2*t * p1[1] +
+             3*mt*t**2 * p2[1] + t**3 * p3[1])
+        pts.append((x, y))
+    return pts
+
+
 def _path_to_polygon(path, rect):
     """
     Extract vertices from a PyMuPDF path dict and return a Shapely Polygon
     normalized to local inch coordinates with origin at (0, 0).
-    Returns None if the path has fewer than 3 usable points.
+    Bezier curves are sampled along their length so the polygon accurately
+    follows curved outlines. Returns None if fewer than 3 usable points.
     """
     origin_x = rect.x0
     origin_y = rect.y0
     scale    = 1.0 / 72.0
 
+    def to_local(pt):
+        return ((pt.x - origin_x) * scale, (pt.y - origin_y) * scale)
+
     points = []
     for item in path.get("items", []):
         kind = item[0]
         if kind == "l":
-            points.append(((item[1].x - origin_x) * scale,
-                           (item[1].y - origin_y) * scale))
-            points.append(((item[2].x - origin_x) * scale,
-                           (item[2].y - origin_y) * scale))
+            points.append(to_local(item[1]))
+            points.append(to_local(item[2]))
         elif kind == "c":
-            points.append(((item[1].x - origin_x) * scale,
-                           (item[1].y - origin_y) * scale))
-            points.append(((item[4].x - origin_x) * scale,
-                           (item[4].y - origin_y) * scale))
+            p0 = to_local(item[1])
+            p1 = to_local(item[2])
+            p2 = to_local(item[3])
+            p3 = to_local(item[4])
+            points.append(p0)
+            points.extend(_sample_bezier(p0, p1, p2, p3, segments=8))
         elif kind == "re":
             r = item[1]
             points += [
@@ -83,6 +105,10 @@ def _path_to_polygon(path, rect):
                 ((r.x1 - origin_x) * scale, (r.y1 - origin_y) * scale),
                 ((r.x0 - origin_x) * scale, (r.y1 - origin_y) * scale),
             ]
+        elif kind == "qu":
+            q = item[1]
+            for pt in [q.ul, q.ur, q.lr, q.ll]:
+                points.append(to_local(pt))
 
     deduped = [points[0]] if points else []
     for p in points[1:]:

@@ -385,13 +385,18 @@ def _pack_sheet_contour(shapes, sheet_w, sheet_h, padding, spacing, rotation_mod
         x = padding
         while x + w <= sheet_w - padding:
             x_snaps.add(round(x, 3))
-            x += 0.5
+            x += 1.0
 
-        # Candidate Y positions: bottom of sheet, plus above each placed shape
+        # Candidate Y positions: bottom of sheet, above each placed shape,
+        # plus a coarse vertical grid so shapes can find tighter settling spots
         y_snaps = {sheet_h - padding - h}
         for b in placed_bounds:
             y_snaps.add(b[1] - h - spacing)
             y_snaps.add(b[3] + spacing)
+        gy = padding
+        while gy <= sheet_h - padding - h:
+            y_snaps.add(round(gy, 3))
+            gy += 2.0
 
         x_list = sorted(c for c in x_snaps if padding <= c <= sheet_w - padding - w)
         # Largest y first = bottom of sheet first

@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(claude *)"
+      "Bash(claude *)",
+      "Bash(python *)"
     ]
   }
 }

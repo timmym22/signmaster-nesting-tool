@@ -7,6 +7,7 @@
 import fitz
 from PIL import Image, ImageDraw, ImageTk
 import PIL.ImageChops as ImageChops
+from shapely.geometry import Polygon as ShapelyPolygon
 
 # ── Visual constants ──────────────────────────────────────────────────────────
 
@@ -64,6 +65,20 @@ def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale, source_pdf=None):
                 doc.close()
             except Exception:
                 thumb = None
+
+        # Draw the true contour cut-line for verification
+        poly = ps.shape.contour_polygon
+        if poly is not None:
+            if getattr(ps, "rotation_deg", 0) == 180:
+                rw = ps.shape.source_rect.width  / 72.0
+                rh = ps.shape.source_rect.height / 72.0
+                ccx, ccy = rw / 2.0, rh / 2.0
+                coords = [(2*ccx - px, 2*ccy - py) for px, py in poly.exterior.coords]
+            else:
+                coords = list(poly.exterior.coords)
+            line_pts = [((ps.x_in + px) * scale, (ps.y_in + py) * scale) for px, py in coords]
+            if len(line_pts) >= 2:
+                draw.line(line_pts + [line_pts[0]], fill="#0066ff", width=2)
 
         if thumb is not None:
             img.paste(thumb, (x0, y0), thumb)
