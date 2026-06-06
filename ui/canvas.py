@@ -6,6 +6,7 @@
 
 import fitz
 from PIL import Image, ImageDraw, ImageTk
+import PIL.ImageChops as ImageChops
 
 # ── Visual constants ──────────────────────────────────────────────────────────
 
@@ -21,7 +22,7 @@ def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale, source_pdf=None):
     img_w = max(1, int(sheet_w_in * scale))
     img_h = max(1, int(sheet_h_in * scale))
 
-    img  = Image.new("RGB", (img_w, img_h), SHEET_BG)
+    img  = Image.new("RGBA", (img_w, img_h), SHEET_BG)
     draw = ImageDraw.Draw(img)
 
     draw.rectangle(
@@ -45,13 +46,27 @@ def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale, source_pdf=None):
                 zoom     = scale / 72.0
                 mat      = fitz.Matrix(zoom, zoom)
                 pix      = src_page.get_pixmap(matrix=mat, clip=clip, alpha=False)
-                thumb    = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                thumb    = Image.frombytes("RGB", [pix.width, pix.height], pix.samples).convert("RGBA")
+
+                # Key out near-white pixels so only the artwork remains
+                r, g, b, a = thumb.split()
+                rt = r.point(lambda v: 255 if v > 240 else 0)
+                gt = g.point(lambda v: 255 if v > 240 else 0)
+                bt = b.point(lambda v: 255 if v > 240 else 0)
+                white_mask = ImageChops.multiply(ImageChops.multiply(rt, gt), bt)
+                alpha = white_mask.point(lambda v: 0 if v == 255 else 255)
+                thumb.putalpha(alpha)
+
+                # Rotate thumbnail to match the nester's 180-degree placement
+                if getattr(ps, "rotation_deg", 0) == 180:
+                    thumb = thumb.rotate(180)
+
                 doc.close()
             except Exception:
                 thumb = None
 
         if thumb is not None:
-            img.paste(thumb, (x0, y0))
+            img.paste(thumb, (x0, y0), thumb)
         else:
             draw.rectangle(
                 [x0, y0, x1, y1],
@@ -65,7 +80,7 @@ def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale, source_pdf=None):
     sheet_area = sheet_w_in * sheet_h_in
     usage_pct  = (used_area / sheet_area * 100) if sheet_area > 0 else 0
 
-    return img, usage_pct
+    return img.convert("RGB"), usage_pct
 
 
 def compute_fit_scale(canvas_widget, sheet_w_in, sheet_h_in):
