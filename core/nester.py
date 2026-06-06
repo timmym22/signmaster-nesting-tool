@@ -610,7 +610,7 @@ def _nfp_pair(keyA, polyA, keyB, polyB, spacing):
     cached = _NFP_PAIR_CACHE.get(k)
     if cached is not None:
         return cached
-    region = compute_nfp(polyA, polyB, spacing=spacing, simplify_tol=0.05)
+    region = compute_nfp(polyA, polyB, spacing=spacing, simplify_tol=0.10)
     _NFP_PAIR_CACHE[k] = region
     return region
 
