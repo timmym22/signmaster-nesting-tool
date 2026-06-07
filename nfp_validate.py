@@ -141,13 +141,14 @@ def _norm0(poly):
 
 
 def region_symdiff(candidate, truth):
-    """Fraction symmetric-difference after normalising both to bbox origin."""
+    """Fraction symmetric-difference at ABSOLUTE position. Compares where the
+    region actually sits, not just its shape, so a reference-point/convention
+    offset is caught (bbox-normalising would hide it)."""
     if candidate is None or candidate.is_empty:
         return 1.0
     if not candidate.is_valid:
         candidate = candidate.buffer(0)
-    c0, t0 = _norm0(candidate), _norm0(truth)
-    return c0.symmetric_difference(t0).area / max(1e-9, truth.area)
+    return candidate.symmetric_difference(truth).area / max(1e-9, truth.area)
 
 
 # --------------------------------------------------------------------------

@@ -1071,6 +1071,9 @@ def compute_nfp_orbital_cy(A, B, spacing=0.0, simplify_tol=NFP_SIMPLIFY_TOL):
     poly = _NFPPolygon(outer, voids)
     if not poly.is_valid:
         poly = poly.buffer(0)
+    # Align to compute_nfp's convention: the NFP is expressed as translations of
+    # B's ORIGIN, but the orbital traces B's first vertex, so shift by -B[0].
+    poly = _nfp_affinity.translate(poly, xoff=-cb[0][0], yoff=-cb[0][1])
     if spacing:
         poly = poly.buffer(spacing, join_style=2)
     return poly
