@@ -9,6 +9,16 @@ from PIL import Image, ImageDraw, ImageTk
 import PIL.ImageChops as ImageChops
 from shapely.geometry import Polygon as ShapelyPolygon
 
+_DOC_CACHE = {}
+
+def _get_doc(path):
+    """Open a PDF once and reuse it for the whole session."""
+    doc = _DOC_CACHE.get(path)
+    if doc is None:
+        doc = fitz.open(path)
+        _DOC_CACHE[path] = doc
+    return doc
+
 # ── Visual constants ──────────────────────────────────────────────────────────
 
 SHEET_BG      = "#ffffff"
@@ -41,7 +51,7 @@ def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale, source_pdf=None):
         thumb = None
         if source_pdf is not None:
             try:
-                doc      = fitz.open(source_pdf)
+                doc      = _get_doc(source_pdf)
                 src_page = doc[ps.shape.source_page]
                 clip     = ps.shape.source_rect
                 zoom     = scale / 72.0
@@ -74,7 +84,6 @@ def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale, source_pdf=None):
                 if getattr(ps, "rotation_deg", 0) == 180:
                     thumb = thumb.rotate(180)
 
-                doc.close()
             except Exception:
                 thumb = None
 
