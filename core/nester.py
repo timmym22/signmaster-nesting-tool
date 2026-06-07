@@ -935,7 +935,7 @@ def _nfp_run_ordering(payload):
 
 def _nest_nfp(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode):
     """Deterministic keep-best over several sort orders; returns list[list[PlacedShape]]."""
-    tol = 0.10 if len(shapes) <= 40 else 0.5   # fine detail small, coarse large
+    tol = 0.10 if len(shapes) <= 40 else 0.75   # fine detail small, coarse large
     use_bestfit = len(shapes) <= 40            # best-fit fill: small jobs only
     payloads = [(ki, shapes, sheet_w, sheet_h, padding, spacing, rotation_mode, tol, use_bestfit)
                 for ki in range(len(_NFP_ORDERINGS))]
