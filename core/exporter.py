@@ -10,7 +10,8 @@ from core.nester import SHEET_W_IN, SHEET_H_IN
 PTS_PER_IN = 72.0
 
 
-def export_pdf(source_pdf_path, sheets, output_path):
+def export_pdf(source_pdf_path, sheets, output_path,
+               sheet_w_in=SHEET_W_IN, sheet_h_in=SHEET_H_IN):
     """
     Write a print-ready PDF to output_path.
 
@@ -38,8 +39,8 @@ def export_pdf(source_pdf_path, sheets, output_path):
 
     out_doc = fitz.open()  # new empty PDF in memory
 
-    page_w_pts = SHEET_W_IN * PTS_PER_IN
-    page_h_pts = SHEET_H_IN * PTS_PER_IN
+    page_w_pts = sheet_w_in * PTS_PER_IN
+    page_h_pts = sheet_h_in * PTS_PER_IN
 
     total_shapes = 0
 

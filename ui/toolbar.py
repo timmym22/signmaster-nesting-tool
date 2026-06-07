@@ -124,6 +124,26 @@ def build_toolbar(root, callbacks, defaults):
              ).pack(side="left", padx=(0, 2))
     refs["padding_var"] = padding_var
 
+    # Sheet group
+    g_sheet = _group(bar, "Sheet (in)")
+    g_sheet.pack(side="left", padx=(0, 10), fill="y")
+
+    tk.Label(g_sheet, text="W", bg=PANEL_BG, fg=TEXT_DARK,
+             font=LABEL_FONT).pack(side="left", padx=(0, 4))
+    sheet_w_var = tk.StringVar(value=str(defaults.get("sheet_w", 48.0)))
+    tk.Entry(g_sheet, textvariable=sheet_w_var, width=6,
+             font=LABEL_FONT, relief="solid", bd=1
+             ).pack(side="left", padx=(0, 8))
+    refs["sheet_w_var"] = sheet_w_var
+
+    tk.Label(g_sheet, text="H", bg=PANEL_BG, fg=TEXT_DARK,
+             font=LABEL_FONT).pack(side="left", padx=(0, 4))
+    sheet_h_var = tk.StringVar(value=str(defaults.get("sheet_h", 96.0)))
+    tk.Entry(g_sheet, textvariable=sheet_h_var, width=6,
+             font=LABEL_FONT, relief="solid", bd=1
+             ).pack(side="left", padx=(0, 2))
+    refs["sheet_h_var"] = sheet_h_var
+
     # View group
     g_view = _group(bar, "View")
     g_view.pack(side="left", fill="y")

@@ -50,6 +50,8 @@ class NestingApp:
         self.mode              = None    # "preview" (source pages) or "nested"
         self.source_page_count = 0
         self._hires_base       = None
+        self.sheet_w           = SHEET_W_IN
+        self.sheet_h           = SHEET_H_IN
 
         # canvas display / interaction state
         self._img_w           = 0
@@ -144,6 +146,20 @@ class NestingApp:
         except ValueError:
             return 0.25
 
+    def _sheet_w(self):
+        try:
+            v = float(self.refs["sheet_w_var"].get())
+            return v if v > 0 else SHEET_W_IN
+        except (ValueError, KeyError):
+            return SHEET_W_IN
+
+    def _sheet_h(self):
+        try:
+            v = float(self.refs["sheet_h_var"].get())
+            return v if v > 0 else SHEET_H_IN
+        except (ValueError, KeyError):
+            return SHEET_H_IN
+
     def _view_count(self):
         if self.mode == "nested":
             return len(self.sheets)
@@ -211,10 +227,12 @@ class NestingApp:
         rotation_mode = "none/180" if rotation_display == "0/180" else rotation_display
         method = self.refs["method_var"].get()
 
+        self.sheet_w = self._sheet_w()
+        self.sheet_h = self._sheet_h()
         self.sheets = nest_shapes(
             self.shapes,
-            sheet_w       = SHEET_W_IN,
-            sheet_h       = SHEET_H_IN,
+            sheet_w       = self.sheet_w,
+            sheet_h       = self.sheet_h,
             padding       = self._padding(),
             spacing       = self._spacing(),
             rotation_mode = rotation_mode,
@@ -260,6 +278,8 @@ class NestingApp:
                 source_pdf_path = self.source_pdf,
                 sheets          = self.sheets,
                 output_path     = out_path,
+                sheet_w_in      = self.sheet_w,
+                sheet_h_in      = self.sheet_h,
             )
         except (RuntimeError, IOError) as e:
             messagebox.showerror("Export failed", str(e))
@@ -363,7 +383,7 @@ class NestingApp:
             w_in, h_in = pdf_page_size_in(self.source_pdf, self.current_sheet)
             self.scale = compute_fit_scale(self.canvas, w_in, h_in)
         else:
-            self.scale = compute_fit_scale(self.canvas, SHEET_W_IN, SHEET_H_IN)
+            self.scale = compute_fit_scale(self.canvas, self.sheet_w, self.sheet_h)
 
     def _display(self, img, focus=None, update_base=True):
         """Place a PIL image on the canvas, centered when it is smaller than the
@@ -424,13 +444,13 @@ class NestingApp:
             placed = self.sheets[self.current_sheet]
             self._hires_base, _ = render_sheet(
                 placed_shapes=placed,
-                sheet_w_in=SHEET_W_IN,
-                sheet_h_in=SHEET_H_IN,
+                sheet_w_in=self.sheet_w,
+                sheet_h_in=self.sheet_h,
                 scale=HIRES_SCALE,
                 source_pdf=self.source_pdf,
             )
-        nw = max(1, int(SHEET_W_IN * self.scale))
-        nh = max(1, int(SHEET_H_IN * self.scale))
+        nw = max(1, int(self.sheet_w * self.scale))
+        nh = max(1, int(self.sheet_h * self.scale))
         img = self._hires_base.resize((nw, nh), Image.LANCZOS)
         self._display(img, focus=focus)
 
@@ -443,8 +463,8 @@ class NestingApp:
 
         img, usage = render_sheet(
             placed_shapes = placed,
-            sheet_w_in    = SHEET_W_IN,
-            sheet_h_in    = SHEET_H_IN,
+            sheet_w_in    = self.sheet_w,
+            sheet_h_in    = self.sheet_h,
             scale         = self.scale,
             source_pdf    = self.source_pdf,
         )
