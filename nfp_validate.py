@@ -194,6 +194,21 @@ def load_pairs():
         for b in range(a, len(picked)):
             ia, ib = picked[a], picked[b]
             pairs.append((f"shape{ia}|shape{ib}", locs[ia], locs[ib], False))
+    # hole-shapes (letter counters): largest counters + fitting probes exercise interior voids
+    def _hole_area(p):
+        return sum(P(h).area for h in p.interiors)
+    hole_idx = sorted(
+        [i for i in range(len(locs))
+         if len(locs[i].interiors) > 0 and len(locs[i].exterior.coords) <= EXACT_VERT_CAP],
+        key=lambda i: -_hole_area(locs[i]),
+    )[:6]
+    probe3 = P([(0, 0), (3, 0), (3, 3), (0, 3)])
+    probe4 = P([(0, 0), (4, 0), (4, 4), (0, 4)])
+    for i in hole_idx:
+        pairs.append((f"hole{i}|4sq", locs[i], probe4, False))
+        pairs.append((f"hole{i}|3sq", locs[i], probe3, False))
+    for a in range(0, len(hole_idx) - 1, 2):
+        pairs.append((f"hole{hole_idx[a]}|hole{hole_idx[a+1]}", locs[hole_idx[a]], locs[hole_idx[a+1]], False))
     return pairs
 
 
@@ -238,8 +253,8 @@ def main():
           f"exact oracle cap={EXACT_VERT_CAP} verts)\n")
 
     methods = [(N.compute_nfp, "compute_nfp (LIVE — expected FAIL: under-fill)")]
-    if hasattr(N, "compute_nfp_orbital"):
-        methods.append((N.compute_nfp_orbital, "compute_nfp_orbital (rewrite target)"))
+    if hasattr(N, "compute_nfp_orbital_cy"):
+        methods.append((N.compute_nfp_orbital_cy, "compute_nfp_orbital_cy (Cython full: outer+voids)"))
 
     for fn, nm in methods:
         validate(fn, nm, pairs, spacing=0.0)

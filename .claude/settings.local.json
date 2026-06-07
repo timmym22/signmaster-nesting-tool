@@ -16,7 +16,10 @@
       "Bash(powershell *)",
       "Bash(pip install *)",
       "Bash(rm -f cy_smoketest.pyx cy_smoketest_setup.py cy_smoketest.c cy_smoketest.cp312-win_amd64.pyd)",
-      "Bash(rm -rf build)"
+      "Bash(rm -rf build)",
+      "Bash(git rm *)",
+      "Bash(git check-ignore *)",
+      "Bash(git add *)"
     ]
   }
 }

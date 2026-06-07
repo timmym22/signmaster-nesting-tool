@@ -1048,3 +1048,29 @@ def compute_nfp_orbital(A, B, spacing=0.0, simplify_tol=0.05):
     if not poly.is_valid: poly=poly.buffer(0)
     if spacing: poly=poly.buffer(spacing, join_style=2)
     return poly
+
+def compute_nfp_orbital_cy(A, B, spacing=0.0, simplify_tol=NFP_SIMPLIFY_TOL):
+    """Full orbital NFP via the compiled Cython module: outer loop + interior
+    counter-voids (B nesting inside A's holes). Gate-validated exact vs the
+    triangulation oracle. DORMANT — not wired into nest_shapes yet."""
+    from core import orbital_cy as _ocy
+    if simplify_tol:
+        A = A.simplify(simplify_tol, preserve_topology=True)
+        B = B.simplify(simplify_tol, preserve_topology=True)
+    ca = [(x, y) for x, y in list(A.exterior.coords)[:-1]]
+    cb = [(x, y) for x, y in list(B.exterior.coords)[:-1]]
+    outer = _ocy.nfp_outer(ca, cb)
+    if not outer or len(outer) < 3:
+        return _NFPPolygon()
+    voids = []
+    for h in A.interiors:
+        hc = [(x, y) for x, y in list(h.coords)[:-1]]
+        v = _ocy.nfp_inside(hc, cb)
+        if v and len(v) >= 3:
+            voids.append(v)
+    poly = _NFPPolygon(outer, voids)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    if spacing:
+        poly = poly.buffer(spacing, join_style=2)
+    return poly

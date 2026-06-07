@@ -225,3 +225,135 @@ def nfp_outer(list Acoords, list Bcoords):
         out.append((rx,ry))
     free(Ax); free(Ay); free(Bx); free(By); free(cvx); free(cvy)
     return out
+
+# ===== interior NFP (counter voids): B orbiting inside hole H =====
+cdef bint c_pip(double* Hx,double* Hy,int nH,double px,double py) nogil:
+    cdef bint inside=False
+    cdef int i,j=nH-1
+    for i in range(nH):
+        if ((Hy[i]>py) != (Hy[j]>py)) and (px < (Hx[j]-Hx[i])*(py-Hy[i])/(Hy[j]-Hy[i])+Hx[i]):
+            inside = not inside
+        j=i
+    return inside
+
+cdef bint c_segcross(double ax,double ay,double bx,double by,double cx,double cy,double dx,double dy) nogil:
+    cdef double d1=(bx-ax)*(cy-ay)-(by-ay)*(cx-ax)
+    cdef double d2=(bx-ax)*(dy-ay)-(by-ay)*(dx-ax)
+    cdef double d3=(dx-cx)*(ay-cy)-(dy-cy)*(ax-cx)
+    cdef double d4=(dx-cx)*(by-cy)-(dy-cy)*(bx-cx)
+    if ((d1>TOL and d2<-TOL) or (d1<-TOL and d2>TOL)) and ((d3>TOL and d4<-TOL) or (d3<-TOL and d4>TOL)):
+        return True
+    return False
+
+def nfp_inside(list Hcoords, list Bcoords):
+    cdef int nH=len(Hcoords), nB=len(Bcoords)
+    cdef double* Hx=<double*>malloc(nH*sizeof(double))
+    cdef double* Hy=<double*>malloc(nH*sizeof(double))
+    cdef double* Bx=<double*>malloc(nB*sizeof(double))
+    cdef double* By=<double*>malloc(nB*sizeof(double))
+    cdef int capV=8*(nH*nB)+64
+    cdef double* cvx=<double*>malloc(capV*sizeof(double))
+    cdef double* cvy=<double*>malloc(capV*sizeof(double))
+    cdef int i,j,ni,nj,nc,k,i2,j2
+    for i in range(nH): Hx[i]=Hcoords[i][0]; Hy[i]=Hcoords[i][1]
+    for i in range(nB): Bx[i]=Bcoords[i][0]; By[i]=Bcoords[i][1]
+    # centroids (polygon centroid)
+    cdef double HA=0,Hcx=0,Hcy=0,cr
+    for i in range(nH):
+        i2=(i+1)%nH; cr=Hx[i]*Hy[i2]-Hx[i2]*Hy[i]; HA+=cr; Hcx+=(Hx[i]+Hx[i2])*cr; Hcy+=(Hy[i]+Hy[i2])*cr
+    cdef double Bcx=0,Bcy=0,BA=0
+    for i in range(nB):
+        i2=(i+1)%nB; cr=Bx[i]*By[i2]-Bx[i2]*By[i]; BA+=cr; Bcx+=(Bx[i]+Bx[i2])*cr; Bcy+=(By[i]+By[i2])*cr
+    if fabs(HA)<1e-12 or fabs(BA)<1e-12:
+        free(Hx);free(Hy);free(Bx);free(By);free(cvx);free(cvy); return None
+    Hcx/=(3*HA); Hcy/=(3*HA); Bcx/=(3*BA); Bcy/=(3*BA)
+    cdef double ox=Hcx-Bcx, oy=Hcy-Bcy
+    for i in range(nB): Bx[i]+=ox; By[i]+=oy
+    # containment: all B verts strictly inside H, no B-edge crosses any H-edge
+    cdef bint ok=True
+    for i in range(nB):
+        if not c_pip(Hx,Hy,nH,Bx[i],By[i]): ok=False; break
+    if ok:
+        for i in range(nB):
+            i2=(i+1)%nB
+            for j in range(nH):
+                j2=(j+1)%nH
+                if c_segcross(Bx[i],By[i],Bx[i2],By[i2],Hx[j],Hy[j],Hx[j2],Hy[j2]): ok=False; break
+            if not ok: break
+    if not ok:
+        free(Hx);free(Hy);free(Bx);free(By);free(cvx);free(cvy); return None
+    # slide down to touch inner wall (fallback up)
+    cdef double d=c_slidedist(Hx,Hy,nH,Bx,By,nB,0,-1)
+    if isnan(d) or d<0:
+        d=c_slidedist(Hx,Hy,nH,Bx,By,nB,0,1)
+        if isnan(d) or d<0:
+            free(Hx);free(Hy);free(Bx);free(By);free(cvx);free(cvy); return None
+        for i in range(nB): By[i]+=d
+    else:
+        for i in range(nB): By[i]-=d
+    # step loop (same as outer)
+    cdef double rx=Bx[0], ry=By[0], sx=rx, sy=ry
+    cdef double prevx=0, prevy=0
+    cdef bint haveprev=False, found=False
+    out=[(rx,ry)]
+    cdef int ty,ai,bj,pAi,nAi_,pBi,nBi_
+    cdef double vAx,vAy,pAx,pAy,nAx,nAy,vBx,vBy,pBx,pBy,nBx,nBy
+    cdef double vx,vy,md,v2,sc,trx,try_,ux,uy,pux,puy,ul,pl,dd
+    cdef int maxiter=40*(nH+nB), it
+    for it in range(maxiter):
+        nc=0
+        for i in range(nH):
+            ni=(i+1)%nH
+            for j in range(nB):
+                nj=(j+1)%nB
+                ty=-1
+                if fabs(Hx[i]-Bx[j])<TOL and fabs(Hy[i]-By[j])<TOL: ty=0; ai=i; bj=j
+                elif c_onseg(Hx[i],Hy[i],Hx[ni],Hy[ni],Bx[j],By[j]): ty=1; ai=ni; bj=j
+                elif c_onseg(Bx[j],By[j],Bx[nj],By[nj],Hx[i],Hy[i]): ty=2; ai=i; bj=nj
+                if ty<0: continue
+                pAi=ai-1 if ai>0 else nH-1; nAi_=(ai+1)%nH; pBi=bj-1 if bj>0 else nB-1; nBi_=(bj+1)%nB
+                vAx=Hx[ai]; vAy=Hy[ai]; pAx=Hx[pAi]; pAy=Hy[pAi]; nAx=Hx[nAi_]; nAy=Hy[nAi_]
+                vBx=Bx[bj]; vBy=By[bj]; pBx=Bx[pBi]; pBy=By[pBi]; nBx=Bx[nBi_]; nBy=By[nBi_]
+                if ty==0:
+                    if nc+4<capV:
+                        cvx[nc]=pAx-vAx; cvy[nc]=pAy-vAy; nc+=1
+                        cvx[nc]=nAx-vAx; cvy[nc]=nAy-vAy; nc+=1
+                        cvx[nc]=vBx-pBx; cvy[nc]=vBy-pBy; nc+=1
+                        cvx[nc]=vBx-nBx; cvy[nc]=vBy-nBy; nc+=1
+                elif ty==1:
+                    if nc+2<capV:
+                        cvx[nc]=vAx-vBx; cvy[nc]=vAy-vBy; nc+=1
+                        cvx[nc]=pAx-vBx; cvy[nc]=pAy-vBy; nc+=1
+                elif ty==2:
+                    if nc+2<capV:
+                        cvx[nc]=vAx-vBx; cvy[nc]=vAy-vBy; nc+=1
+                        cvx[nc]=vAx-pBx; cvy[nc]=vAy-pBy; nc+=1
+        md=0.0; trx=0.0; try_=0.0; found=False
+        for k in range(nc):
+            vx=cvx[k]; vy=cvy[k]
+            if fabs(vx)<TOL and fabs(vy)<TOL: continue
+            if haveprev and (vy*prevy+vx*prevx)<0:
+                ul=hypot(vx,vy); pl=hypot(prevx,prevy)
+                if ul<1e-12 or pl<1e-12: continue
+                ux=vx/ul; uy=vy/ul; pux=prevx/pl; puy=prevy/pl
+                if fabs(uy*pux-ux*puy)<1e-4: continue
+            dd=c_slidedist(Hx,Hy,nH,Bx,By,nB,vx,vy)
+            v2=vx*vx+vy*vy
+            if isnan(dd) or dd*dd>v2: dd=sqrt(v2)
+            if dd>md:
+                md=dd; trx=vx; try_=vy; found=True
+        if not found or fabs(md)<TOL: break
+        prevx=trx; prevy=try_; haveprev=True
+        v2=trx*trx+try_*try_
+        if md*md<v2 and fabs(md*md-v2)>TOL:
+            sc=sqrt((md*md)/v2); trx*=sc; try_*=sc
+        rx+=trx; ry+=try_
+        for i in range(nB): Bx[i]+=trx; By[i]+=try_
+        if fabs(rx-sx)<1e-4 and fabs(ry-sy)<1e-4: break
+        found=False
+        for k in range(len(out)-1):
+            if fabs(rx-out[k][0])<1e-4 and fabs(ry-out[k][1])<1e-4: found=True; break
+        if found: break
+        out.append((rx,ry))
+    free(Hx);free(Hy);free(Bx);free(By);free(cvx);free(cvy)
+    return out if len(out)>=3 else None
