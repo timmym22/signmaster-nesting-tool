@@ -1,0 +1,9 @@
+# Cython build artifacts
+build/
+core/orbital_cy.c
+core/*.pyd
+core/*.so
+
+# Python bytecode
+__pycache__/
+*.pyc

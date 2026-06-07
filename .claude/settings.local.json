@@ -13,7 +13,10 @@
       "Read(//c/Users/timmy/Downloads/**)",
       "Bash(git --no-pager diff ui/toolbar.py)",
       "Bash(git --no-pager diff core/exporter.py)",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "Bash(pip install *)",
+      "Bash(rm -f cy_smoketest.pyx cy_smoketest_setup.py cy_smoketest.c cy_smoketest.cp312-win_amd64.pyd)",
+      "Bash(rm -rf build)"
     ]
   }
 }
