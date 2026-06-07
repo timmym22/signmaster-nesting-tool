@@ -18,6 +18,7 @@ from ui.canvas      import (render_sheet, compute_fit_scale, CANVAS_BG,
 ZOOM_MIN = 2.0
 ZOOM_MAX = 40.0
 HIRES_SCALE = 24.0   # base resolution for crisp, fast zoom
+PREVIEW_MAX_PX = 2200  # cap source-preview raster (rendered once, then resized)
 
 
 class NestingApp:
@@ -62,6 +63,9 @@ class NestingApp:
         self._zoom_focus      = None
         self._base_img        = None   # last crisp-rendered PIL image
         self._base_scale      = None   # the scale it was rendered at
+        self._preview_base      = None  # cached source-page raster (rendered once per page)
+        self._preview_base_page = None
+        self._preview_base_in   = None
 
         # ── Build UI ──────────────────────────────────────────────────────────
         self.refs = build_toolbar(
@@ -177,6 +181,7 @@ class NestingApp:
             return
 
         self.source_pdf        = path
+        self._preview_base     = None   # invalidate cached raster for the new file
         self.sheets            = []
         self.mode              = "preview"
         self.source_page_count = max(1, pdf_page_count(path))
@@ -451,7 +456,19 @@ class NestingApp:
         if not self.source_pdf:
             return
         total = self.source_page_count
-        img, _ = render_pdf_page(self.source_pdf, self.current_sheet, self.scale)
+        # The source page can be huge/slow to rasterize, so render it ONCE per
+        # page at a capped resolution and cache it; resize the cached image for
+        # fit/zoom/resize instead of re-rasterizing on every event.
+        if self._preview_base is None or self._preview_base_page != self.current_sheet:
+            w_in, h_in = pdf_page_size_in(self.source_pdf, self.current_sheet)
+            ppi = PREVIEW_MAX_PX / max(w_in, h_in, 1e-6)
+            self._preview_base, _ = render_pdf_page(self.source_pdf, self.current_sheet, ppi)
+            self._preview_base_page = self.current_sheet
+            self._preview_base_in = (w_in, h_in)
+        w_in, h_in = self._preview_base_in
+        nw = max(1, int(round(w_in * self.scale)))
+        nh = max(1, int(round(h_in * self.scale)))
+        img = self._preview_base.resize((nw, nh), Image.LANCZOS)
         self._display(img, focus)
         self.sheet_label.set(f"Source page {self.current_sheet + 1} of {total}")
         self.usage_label.set(f"{len(self.shapes)} shapes loaded")
