@@ -6,6 +6,7 @@
 import fitz  # PyMuPDF
 from models.shape import Shape
 from shapely.geometry import Polygon as ShapelyPolygon
+from shapely.ops import unary_union
 
 # ── Cut contour color detection ───────────────────────────────────────────────
 # CorelDRAW exports the cut contour as a specific pink/magenta stroke.
@@ -72,59 +73,84 @@ def _sample_bezier(p0, p1, p2, p3, segments=8):
 
 def _path_to_polygon(path, rect):
     """
-    Extract vertices from a PyMuPDF path dict and return a Shapely Polygon
-    normalized to local inch coordinates with origin at (0, 0).
-    Bezier curves are sampled along their length so the polygon accurately
-    follows curved outlines. Returns None if fewer than 3 usable points.
+    Build a Shapely polygon (local inch coords, origin at rect top-left) from a
+    PyMuPDF path. Splits the path into subpaths; the largest subpath is the
+    outer cut outline and any subpaths enclosed by it become holes. Bezier
+    curves are sampled so curved outlines are accurate. Returns None if nothing
+    usable is found.
     """
-    origin_x = rect.x0
-    origin_y = rect.y0
-    scale    = 1.0 / 72.0
+    ox, oy = rect.x0, rect.y0
+    sc = 1.0 / 72.0
+    def loc(pt):
+        return ((pt.x - ox) * sc, (pt.y - oy) * sc)
 
-    def to_local(pt):
-        return ((pt.x - origin_x) * scale, (pt.y - origin_y) * scale)
+    subs = []
+    cur = []
+    last = None
+    def flush():
+        nonlocal cur
+        if len(cur) >= 3:
+            try:
+                p = ShapelyPolygon(cur)
+                if not p.is_valid:
+                    p = p.buffer(0)
+                if not p.is_empty and p.area > 0:
+                    subs.append(p)
+            except Exception:
+                pass
+        cur = []
 
-    points = []
     for item in path.get("items", []):
         kind = item[0]
         if kind == "l":
-            points.append(to_local(item[1]))
-            points.append(to_local(item[2]))
+            s, e = item[1], item[2]
+            pts = [loc(s), loc(e)]
         elif kind == "c":
-            p0 = to_local(item[1])
-            p1 = to_local(item[2])
-            p2 = to_local(item[3])
-            p3 = to_local(item[4])
-            points.append(p0)
-            points.extend(_sample_bezier(p0, p1, p2, p3, segments=8))
+            s, e = item[1], item[4]
+            pts = [loc(item[1])] + _sample_bezier(loc(item[1]), loc(item[2]),
+                                                  loc(item[3]), loc(item[4]), segments=8)
         elif kind == "re":
+            flush()
             r = item[1]
-            points += [
-                ((r.x0 - origin_x) * scale, (r.y0 - origin_y) * scale),
-                ((r.x1 - origin_x) * scale, (r.y0 - origin_y) * scale),
-                ((r.x1 - origin_x) * scale, (r.y1 - origin_y) * scale),
-                ((r.x0 - origin_x) * scale, (r.y1 - origin_y) * scale),
-            ]
+            subs.append(ShapelyPolygon([
+                ((r.x0 - ox) * sc, (r.y0 - oy) * sc),
+                ((r.x1 - ox) * sc, (r.y0 - oy) * sc),
+                ((r.x1 - ox) * sc, (r.y1 - oy) * sc),
+                ((r.x0 - ox) * sc, (r.y1 - oy) * sc)]))
+            last = None
+            continue
         elif kind == "qu":
+            flush()
             q = item[1]
-            for pt in [q.ul, q.ur, q.lr, q.ll]:
-                points.append(to_local(pt))
+            subs.append(ShapelyPolygon([loc(q.ul), loc(q.ur), loc(q.lr), loc(q.ll)]))
+            last = None
+            continue
+        else:
+            continue
+        if last is not None and (abs(s.x - last.x) > 0.01 or abs(s.y - last.y) > 0.01):
+            flush()
+        cur += pts
+        last = e
+    flush()
 
-    deduped = [points[0]] if points else []
-    for p in points[1:]:
-        if p != deduped[-1]:
-            deduped.append(p)
-
-    if len(deduped) < 3:
+    if not subs:
         return None
-
-    try:
-        poly = ShapelyPolygon(deduped)
-        if not poly.is_valid:
-            poly = poly.buffer(0)
-        return poly if poly.is_valid else None
-    except Exception:
-        return None
+    subs.sort(key=lambda p: p.area, reverse=True)
+    outer = subs[0]
+    holes, separate = [], []
+    for p in subs[1:]:
+        if outer.contains(p.representative_point()):
+            holes.append(list(p.exterior.coords))
+        elif p.area > outer.area * 0.2:
+            separate.append(p)
+        # tiny strays outside the outer are ignored
+    if separate:
+        g = unary_union([outer] + separate)
+        return g.convex_hull
+    poly = ShapelyPolygon(list(outer.exterior.coords), holes)
+    if not poly.is_valid:
+        poly = poly.buffer(0)
+    return poly if (not poly.is_empty and poly.is_valid) else None
 
 
 def extract_shapes(pdf_path):

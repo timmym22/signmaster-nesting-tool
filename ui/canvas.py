@@ -56,6 +56,18 @@ def render_sheet(placed_shapes, sheet_w_in, sheet_h_in, scale, source_pdf=None):
                 bt = b.point(lambda v: 255 if v > 240 else 0)
                 white_mask = ImageChops.multiply(ImageChops.multiply(rt, gt), bt)
                 alpha = white_mask.point(lambda v: 0 if v == 255 else 255)
+                # Clip the artwork to the cut contour so nothing spills past the
+                # cut line in the preview (contour holes are cut out too).
+                cpoly = ps.shape.contour_polygon
+                if cpoly is not None:
+                    cmask = Image.new("L", thumb.size, 0)
+                    cdraw = ImageDraw.Draw(cmask)
+                    cdraw.polygon([(px * scale, py * scale)
+                                   for px, py in cpoly.exterior.coords], fill=255)
+                    for ring in cpoly.interiors:
+                        cdraw.polygon([(px * scale, py * scale)
+                                       for px, py in ring.coords], fill=0)
+                    alpha = ImageChops.multiply(alpha, cmask)
                 thumb.putalpha(alpha)
 
                 # Rotate thumbnail to match the nester's 180-degree placement
