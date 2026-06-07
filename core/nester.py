@@ -622,6 +622,17 @@ def _nfp_local_poly(shape, rot180):
     return poly
 
 
+# Prefer the compiled orbital NFP (exact + ~2x faster on large jobs, hole-aware
+# so counter-voids are available). Fall back to the legacy GEOS Minkowski (holes
+# stripped) if the compiled module is absent, so the app never hard-fails on a
+# machine without the .pyd built.
+try:
+    from core import orbital_cy as _ORBITAL_CY  # noqa: F401
+    _ORBITAL_AVAILABLE = True
+except Exception:
+    _ORBITAL_AVAILABLE = False
+
+
 def _nfp_pair(keyA, polyA, keyB, polyB, spacing):
     iA, rA = keyA
     iB, rB = keyB
@@ -634,16 +645,19 @@ def _nfp_pair(keyA, polyA, keyB, polyB, spacing):
     sA = _SIMP_CACHE.get(gA)
     if sA is None:
         sA = polyA.simplify(NFP_SIMPLIFY_TOL, preserve_topology=True)
-        if sA.interiors:
+        if not _ORBITAL_AVAILABLE and sA.interiors:
             sA = ShapelyPolygon(sA.exterior.coords)
         _SIMP_CACHE[gA] = sA
     sB = _SIMP_CACHE.get(gB)
     if sB is None:
         sB = polyB.simplify(NFP_SIMPLIFY_TOL, preserve_topology=True)
-        if sB.interiors:
+        if not _ORBITAL_AVAILABLE and sB.interiors:
             sB = ShapelyPolygon(sB.exterior.coords)
         _SIMP_CACHE[gB] = sB
-    region = compute_nfp(sA, sB, spacing=spacing, simplify_tol=0)
+    if _ORBITAL_AVAILABLE:
+        region = compute_nfp_orbital_cy(sA, sB, spacing=spacing, simplify_tol=0)
+    else:
+        region = compute_nfp(sA, sB, spacing=spacing, simplify_tol=0)
     _GEO_NFP_CACHE[k] = region
     return region
 
