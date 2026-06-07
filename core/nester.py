@@ -588,6 +588,20 @@ from shapely import affinity as _nfp_aff2
 
 _NFP_PAIR_CACHE = {}
 
+_GEO_NFP_CACHE = {}
+_SIMP_CACHE = {}
+_GEOSIG = []
+
+
+def _geo_sig(shape):
+    cp = shape.contour_polygon
+    if cp is None:
+        return ("box", round(shape.width_in, 2), round(shape.height_in, 2))
+    ext = tuple((round(x, 2), round(y, 2)) for x, y in cp.exterior.coords)
+    ints = tuple(tuple((round(x, 2), round(y, 2)) for x, y in r.coords)
+                 for r in cp.interiors)
+    return hash((ext, ints))
+
 
 def _nfp_local_poly(shape, rot180):
     """Local contour polygon for a shape (hole-aware), 180-flipped around the
@@ -609,13 +623,24 @@ def _nfp_local_poly(shape, rot180):
 
 
 def _nfp_pair(keyA, polyA, keyB, polyB, spacing):
-    """Cached NFP of B around A (A at origin)."""
-    k = (keyA, keyB)
-    cached = _NFP_PAIR_CACHE.get(k)
+    iA, rA = keyA
+    iB, rB = keyB
+    gA = (_GEOSIG[iA], rA)
+    gB = (_GEOSIG[iB], rB)
+    k = (gA, gB)
+    cached = _GEO_NFP_CACHE.get(k)
     if cached is not None:
         return cached
-    region = compute_nfp(polyA, polyB, spacing=spacing, simplify_tol=NFP_SIMPLIFY_TOL)
-    _NFP_PAIR_CACHE[k] = region
+    sA = _SIMP_CACHE.get(gA)
+    if sA is None:
+        sA = polyA.simplify(NFP_SIMPLIFY_TOL, preserve_topology=True)
+        _SIMP_CACHE[gA] = sA
+    sB = _SIMP_CACHE.get(gB)
+    if sB is None:
+        sB = polyB.simplify(NFP_SIMPLIFY_TOL, preserve_topology=True)
+        _SIMP_CACHE[gB] = sB
+    region = compute_nfp(sA, sB, spacing=spacing, simplify_tol=0)
+    _GEO_NFP_CACHE[k] = region
     return region
 
 
@@ -830,11 +855,19 @@ _NFP_ORDERINGS = [_ord_0,_ord_1,_ord_2,_ord_3,_ord_4,_ord_5,
 def _nfp_run_ordering(payload):
     ki, shapes, sw, sh, pad, sp, rot, tol = payload
     globals()['NFP_SIMPLIFY_TOL'] = tol
+    global _GEOSIG, _GEO_NFP_CACHE, _SIMP_CACHE
+    _GEOSIG = [_geo_sig(s) for s in shapes]
+    _GEO_NFP_CACHE = {}
+    _SIMP_CACHE = {}
     base = [(i, s) for i, s in enumerate(shapes)]
     order = sorted(base, key=_NFP_ORDERINGS[ki])
-    _NFP_PAIR_CACHE.clear()
     sheets = _nfp_full_run(order, sw, sh, pad, sp, rot)
-    return (len(sheets), round(_nfp_last_density(sheets, sw, sh), 2)), sheets
+    score = (len(sheets), round(_nfp_last_density(sheets, sw, sh), 2))
+    # Return only (index, x, y, rot) per shape so we don't pickle heavy
+    # polygons back from workers; the main process rebuilds the layout.
+    placements = [[(p["key"], p["x"], p["y"], p["rot"]) for p in sheet]
+                  for sheet in sheets]
+    return score, placements
 
 
 def _nest_nfp(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode):
@@ -848,29 +881,22 @@ def _nest_nfp(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode):
     except Exception:
         results = [_nfp_run_ordering(p) for p in payloads]   # serial fallback
     best = min(results, key=lambda r: r[0])
-    sheets = best[1]
 
-    # Convert to PlacedShape, with horizontal block-centering per sheet (x-only,
-    # overlap-safe) so scrap consolidates symmetrically; bottom-up keeps scrap on top.
+    best_placements = best[1]
     result = []
-    for si, placed in enumerate(sheets):
-        if placed:
-            minx = min(p["x"] + p["local"].bounds[0] for p in placed)
-            maxx = max(p["x"] + p["local"].bounds[2] for p in placed)
-            block_w = maxx - minx
-            x_shift = (sheet_w - block_w) / 2.0 - minx
+    for si, sheet in enumerate(best_placements):
+        locs = [(idx, x, y, rot, _nfp_local_poly(shapes[idx], rot))
+                for (idx, x, y, rot) in sheet]
+        if locs:
+            minx = min(x + lp.bounds[0] for _, x, _, _, lp in locs)
+            maxx = max(x + lp.bounds[2] for _, x, _, _, lp in locs)
+            x_shift = (sheet_w - (maxx - minx)) / 2.0 - minx
         else:
             x_shift = 0.0
         sheet_list = []
-        for p in placed:
-            nx = p["x"] + x_shift
+        for idx, x, y, rot, lp in locs:
             sheet_list.append(PlacedShape(
-                shape=p["shape"],
-                x_in=nx,
-                y_in=p["y"],
-                sheet_index=si,
-                rotated=p["rot"],
-                rotation_deg=180.0 if p["rot"] else 0.0,
-            ))
+                shape=shapes[idx], x_in=x + x_shift, y_in=y, sheet_index=si,
+                rotated=rot, rotation_deg=180.0 if rot else 0.0))
         result.append(sheet_list)
     return result
