@@ -813,6 +813,19 @@ def _nfp_fill_sheet(remaining, sheet_w, sheet_h, padding, spacing, rotation_mode
     return placed, pre, bnd, leftover
 
 
+def _nfp_gravity_drop(local_poly, x, y, placed_prep, placed_bounds, sheet_h, padding, spacing):
+    """Slide a piece straight down (same x) to its lowest collision-free y.
+    NFP boundary-vertex candidates can miss this resting spot, leaving pieces
+    stranded high on a sheet; this consolidates them to the bottom."""
+    b = local_poly.bounds
+    max_y = sheet_h - padding - b[3]
+    cur = y
+    for step in (1.0, 0.1):
+        while cur + step <= max_y + 1e-9 and _nfp_exact_ok(local_poly, x, cur + step, placed_prep, placed_bounds, spacing):
+            cur += step
+    return cur
+
+
 def _nfp_compact(placed, pre, bnd, sheet_w, sheet_h, padding, spacing, passes=8):
     for _ in range(passes):
         moved = 0.0
@@ -825,13 +838,18 @@ def _nfp_compact(placed, pre, bnd, sheet_w, sheet_h, padding, spacing, passes=8)
             u = _nfp_union_against(others, me["rk"], me["local"], spacing)
             pos = _nfp_place_lowest(me["local"], u, opre, obnd,
                                     sheet_w, sheet_h, padding, spacing)
+            cands = []
             if pos:
-                nx, ny = pos
-                if (ny > me["y"] + 1e-4) or (abs(ny - me["y"]) <= 1e-4 and nx < me["x"] - 1e-4):
-                    moved += abs(nx - me["x"]) + abs(ny - me["y"])
-                    me["x"], me["y"] = nx, ny
-                    p, b = _nfp_prep_for(me["local"], nx, ny, spacing)
-                    pre[i] = p; bnd[i] = b
+                gx, gy = pos
+                cands.append((gx, _nfp_gravity_drop(me["local"], gx, gy, opre, obnd, sheet_h, padding, spacing)))
+            cands.append((me["x"], _nfp_gravity_drop(me["local"], me["x"], me["y"], opre, obnd, sheet_h, padding, spacing)))
+            cands.sort(key=lambda c: (-c[1], c[0]))
+            nx, ny = cands[0]
+            if (ny > me["y"] + 1e-4) or (abs(ny - me["y"]) <= 1e-4 and nx < me["x"] - 1e-4):
+                moved += abs(nx - me["x"]) + abs(ny - me["y"])
+                me["x"], me["y"] = nx, ny
+                p, b = _nfp_prep_for(me["local"], nx, ny, spacing)
+                pre[i] = p; bnd[i] = b
         if moved < 1e-3:
             break
     return placed, pre, bnd
