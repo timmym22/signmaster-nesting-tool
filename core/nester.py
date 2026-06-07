@@ -713,8 +713,52 @@ def _nfp_exact_ok(local_poly, x, y, placed_prep, placed_bounds, spacing):
     return True
 
 
+# Best-fit concave-tuck fill is enabled per-job by _nest_nfp for small jobs
+# only (<=40 shapes), where it consolidates the tail without the global packing
+# loss it causes on large jobs. Large jobs keep the original bottom-left fill.
+_BESTFIT_FILL = False
+
+
 def _nfp_place_guarded(local_poly, nfp_union, placed_prep, placed_bounds,
                        sheet_w, sheet_h, padding, spacing):
+    cands = _nfp_candidates(local_poly, nfp_union, sheet_w, sheet_h, padding)
+    if not cands:
+        return None
+    # Bottom-left first-valid: original production behaviour. Used for large
+    # jobs (flag off) and always for the first piece of an empty sheet.
+    if not _BESTFIT_FILL or not placed_bounds:
+        for (x, y) in cands:
+            if _nfp_exact_ok(local_poly, x, y, placed_prep, placed_bounds, spacing):
+                return (x, y)
+        return None
+    # Best-fit concave-tuck scoring (small jobs only). Among valid spots, prefer
+    # the one that grows the layout's bounding box the least -- this pulls a piece
+    # into a neighbour's concave gap instead of starting fresh floor space.
+    # Tie-break keeps the packed mass low (large y) so scrap consolidates at top.
+    pminx = min(b[0] for b in placed_bounds); pminy = min(b[1] for b in placed_bounds)
+    pmaxx = max(b[2] for b in placed_bounds); pmaxy = max(b[3] for b in placed_bounds)
+    b = local_poly.bounds
+    best = None
+    seen = 0
+    for (x, y) in cands:
+        if not _nfp_exact_ok(local_poly, x, y, placed_prep, placed_bounds, spacing):
+            continue
+        nx0, ny0, nx1, ny1 = x + b[0], y + b[1], x + b[2], y + b[3]
+        bw = max(pmaxx, nx1) - min(pminx, nx0)
+        bh = max(pmaxy, ny1) - min(pminy, ny0)
+        score = (round(bw * bh, 1), -round(min(pminy, ny0), 1), x)
+        if best is None or score < best[0]:
+            best = (score, x, y)
+        seen += 1
+        if seen >= 120:
+            break
+    return (best[1], best[2]) if best else None
+
+
+def _nfp_place_lowest(local_poly, nfp_union, placed_prep, placed_bounds,
+                      sheet_w, sheet_h, padding, spacing):
+    """Bottom-left first-valid placement. Used by compaction to slide pieces
+    straight down/left to tighten a sheet (best-fit scoring is for fill only)."""
     for (x, y) in _nfp_candidates(local_poly, nfp_union, sheet_w, sheet_h, padding):
         if _nfp_exact_ok(local_poly, x, y, placed_prep, placed_bounds, spacing):
             return (x, y)
@@ -779,8 +823,8 @@ def _nfp_compact(placed, pre, bnd, sheet_w, sheet_h, padding, spacing, passes=8)
             obnd = [bnd[j] for j in range(len(placed)) if j != i]
             others = [placed[j] for j in range(len(placed)) if j != i]
             u = _nfp_union_against(others, me["rk"], me["local"], spacing)
-            pos = _nfp_place_guarded(me["local"], u, opre, obnd,
-                                     sheet_w, sheet_h, padding, spacing)
+            pos = _nfp_place_lowest(me["local"], u, opre, obnd,
+                                    sheet_w, sheet_h, padding, spacing)
             if pos:
                 nx, ny = pos
                 if (ny > me["y"] + 1e-4) or (abs(ny - me["y"]) <= 1e-4 and nx < me["x"] - 1e-4):
@@ -871,8 +915,9 @@ _NFP_ORDERINGS = [_ord_0,_ord_1,_ord_2,_ord_3,_ord_4,_ord_5,
 
 
 def _nfp_run_ordering(payload):
-    ki, shapes, sw, sh, pad, sp, rot, tol = payload
+    ki, shapes, sw, sh, pad, sp, rot, tol, use_bestfit = payload
     globals()['NFP_SIMPLIFY_TOL'] = tol
+    globals()['_BESTFIT_FILL'] = use_bestfit
     global _GEOSIG, _GEO_NFP_CACHE, _SIMP_CACHE
     _GEOSIG = [_geo_sig(s) for s in shapes]
     _GEO_NFP_CACHE = {}
@@ -891,7 +936,8 @@ def _nfp_run_ordering(payload):
 def _nest_nfp(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode):
     """Deterministic keep-best over several sort orders; returns list[list[PlacedShape]]."""
     tol = 0.10 if len(shapes) <= 40 else 0.5   # fine detail small, coarse large
-    payloads = [(ki, shapes, sheet_w, sheet_h, padding, spacing, rotation_mode, tol)
+    use_bestfit = len(shapes) <= 40            # best-fit fill: small jobs only
+    payloads = [(ki, shapes, sheet_w, sheet_h, padding, spacing, rotation_mode, tol, use_bestfit)
                 for ki in range(len(_NFP_ORDERINGS))]
     try:
         with ProcessPoolExecutor(max_workers=min(len(_NFP_ORDERINGS), os.cpu_count() or 1)) as ex:
