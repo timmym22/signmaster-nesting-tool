@@ -634,10 +634,14 @@ def _nfp_pair(keyA, polyA, keyB, polyB, spacing):
     sA = _SIMP_CACHE.get(gA)
     if sA is None:
         sA = polyA.simplify(NFP_SIMPLIFY_TOL, preserve_topology=True)
+        if sA.interiors:
+            sA = ShapelyPolygon(sA.exterior.coords)
         _SIMP_CACHE[gA] = sA
     sB = _SIMP_CACHE.get(gB)
     if sB is None:
         sB = polyB.simplify(NFP_SIMPLIFY_TOL, preserve_topology=True)
+        if sB.interiors:
+            sB = ShapelyPolygon(sB.exterior.coords)
         _SIMP_CACHE[gB] = sB
     region = compute_nfp(sA, sB, spacing=spacing, simplify_tol=0)
     _GEO_NFP_CACHE[k] = region
