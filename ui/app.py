@@ -17,6 +17,7 @@ from ui.canvas      import (render_sheet, compute_fit_scale, CANVAS_BG,
 
 ZOOM_MIN = 2.0
 ZOOM_MAX = 40.0
+HIRES_SCALE = 24.0   # base resolution for crisp, fast zoom
 
 
 class NestingApp:
@@ -47,6 +48,7 @@ class NestingApp:
         self.tk_image_ref      = [None]
         self.mode              = None    # "preview" (source pages) or "nested"
         self.source_page_count = 0
+        self._hires_base       = None
 
         # canvas display / interaction state
         self._img_w           = 0
@@ -287,15 +289,15 @@ class NestingApp:
 
     def zoom_in(self):
         self.scale = min(self.scale + 1, ZOOM_MAX)
-        self._render_current()
+        self._zoom_display()
 
     def zoom_out(self):
         self.scale = max(self.scale - 1, ZOOM_MIN)
-        self._render_current()
+        self._zoom_display()
 
     def zoom_fit(self):
         self._fit_current()
-        self._render_current()
+        self._zoom_display()
 
     # ── Mouse wheel zoom (toward cursor, debounced) ─────────────────────────────
 
@@ -334,7 +336,7 @@ class NestingApp:
         self._pending_zoom = None
         focus = self._zoom_focus
         self._zoom_focus = None
-        self._render_current(focus=focus)
+        self._zoom_display(focus=focus)
 
     # ── Pan (left-click drag) ──────────────────────────────────────────────────
 
@@ -406,9 +408,31 @@ class NestingApp:
         elif self.mode == "preview":
             self._render_preview(focus)
 
+    def _zoom_display(self, focus=None):
+        # Source/preview pages keep the existing render path.
+        if self.mode != "nested" or not self.sheets:
+            self._render_current(focus)
+            return
+        # Render the sheet once at high resolution, then just resize it for
+        # any zoom level (fast). Re-rendered only when the sheet changes.
+        if self._hires_base is None:
+            placed = self.sheets[self.current_sheet]
+            self._hires_base, _ = render_sheet(
+                placed_shapes=placed,
+                sheet_w_in=SHEET_W_IN,
+                sheet_h_in=SHEET_H_IN,
+                scale=HIRES_SCALE,
+                source_pdf=self.source_pdf,
+            )
+        nw = max(1, int(SHEET_W_IN * self.scale))
+        nh = max(1, int(SHEET_H_IN * self.scale))
+        img = self._hires_base.resize((nw, nh), Image.LANCZOS)
+        self._display(img, focus=focus)
+
     def _render_nested(self, focus=None):
         if not self.sheets:
             return
+        self._hires_base = None
         placed = self.sheets[self.current_sheet]
         total  = len(self.sheets)
 
