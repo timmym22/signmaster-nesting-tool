@@ -904,3 +904,147 @@ def _nest_nfp(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode):
                 rotated=rot, rotation_deg=180.0 if rot else 0.0))
         result.append(sheet_list)
     return result
+
+
+# ===== Phase 3 (rewrite): orbital sliding NFP — DORMANT, outer loop only =====
+import math as _orb_math
+def _orb_aeq(a,b,t=1e-7): return abs(a-b)<t
+def _orb_norm(v):
+    l=_orb_math.hypot(v[0],v[1]); return (v[0]/l,v[1]/l) if l>1e-12 else (0.0,0.0)
+def _orb_onseg(A,B,p):
+    if _orb_aeq(A[0],B[0]) and _orb_aeq(A[1],B[1]): return False
+    if _orb_aeq(A[0],B[0]) and _orb_aeq(p[0],A[0]):
+        return (not _orb_aeq(p[1],B[1]) and not _orb_aeq(p[1],A[1]) and min(A[1],B[1])<p[1]<max(A[1],B[1]))
+    if _orb_aeq(A[1],B[1]) and _orb_aeq(p[1],A[1]):
+        return (not _orb_aeq(p[0],B[0]) and not _orb_aeq(p[0],A[0]) and min(A[0],B[0])<p[0]<max(A[0],B[0]))
+    if (p[0]<A[0] and p[0]<B[0]) or (p[0]>A[0] and p[0]>B[0]): return False
+    if (p[1]<A[1] and p[1]<B[1]) or (p[1]>A[1] and p[1]>B[1]): return False
+    cr=(p[1]-A[1])*(B[0]-A[0])-(p[0]-A[0])*(B[1]-A[1])
+    if abs(cr)>1e-7: return False
+    dot=(p[0]-A[0])*(B[0]-A[0])+(p[1]-A[1])*(B[1]-A[1])
+    if dot<0 or _orb_aeq(dot,0): return False
+    L2=(B[0]-A[0])**2+(B[1]-A[1])**2
+    if dot>L2 or _orb_aeq(dot,L2): return False
+    return True
+def _orb_pointdist(p,s1,s2,normal,infinite=False):
+    normal=_orb_norm(normal); d=(normal[1],-normal[0])
+    pd=p[0]*d[0]+p[1]*d[1]; s1d=s1[0]*d[0]+s1[1]*d[1]; s2d=s2[0]*d[0]+s2[1]*d[1]
+    pn=p[0]*normal[0]+p[1]*normal[1]; s1n=s1[0]*normal[0]+s1[1]*normal[1]; s2n=s2[0]*normal[0]+s2[1]*normal[1]
+    if not infinite:
+        if (((pd<s1d or _orb_aeq(pd,s1d)) and (pd<s2d or _orb_aeq(pd,s2d))) or ((pd>s1d or _orb_aeq(pd,s1d)) and (pd>s2d or _orb_aeq(pd,s2d)))): return None
+        if (_orb_aeq(pd,s1d) and _orb_aeq(pd,s2d)) and pn>s1n and pn>s2n: return min(pn-s1n,pn-s2n)
+        if (_orb_aeq(pd,s1d) and _orb_aeq(pd,s2d)) and pn<s1n and pn<s2n: return -min(s1n-pn,s2n-pn)
+    return -(pn-s1n+(s1n-s2n)*(s1d-pd)/(s1d-s2d))
+def _orb_segdist(A,B,E,F,direction):
+    nrm=(direction[1],-direction[0]); rev=(-direction[0],-direction[1])
+    dA=A[0]*nrm[0]+A[1]*nrm[1]; dB=B[0]*nrm[0]+B[1]*nrm[1]; dE=E[0]*nrm[0]+E[1]*nrm[1]; dF=F[0]*nrm[0]+F[1]*nrm[1]
+    cA=A[0]*direction[0]+A[1]*direction[1]; cB=B[0]*direction[0]+B[1]*direction[1]
+    cE=E[0]*direction[0]+E[1]*direction[1]; cF=F[0]*direction[0]+F[1]*direction[1]
+    ABmin=min(dA,dB); ABmax=max(dA,dB); EFmin=min(dE,dF); EFmax=max(dE,dF)
+    if _orb_aeq(ABmax,EFmin) or _orb_aeq(ABmin,EFmax): return None
+    if ABmax<EFmin or ABmin>EFmax: return None
+    if (ABmax>EFmax and ABmin<EFmin) or (EFmax>ABmax and EFmin<ABmin): overlap=1
+    else:
+        mM=min(ABmax,EFmax); Mm=max(ABmin,EFmin); MM=max(ABmax,EFmax); mm=min(ABmin,EFmin)
+        overlap=(mM-Mm)/(MM-mm) if (MM-mm)!=0 else 1
+    cABE=(E[1]-A[1])*(B[0]-A[0])-(E[0]-A[0])*(B[1]-A[1]); cABF=(F[1]-A[1])*(B[0]-A[0])-(F[0]-A[0])*(B[1]-A[1])
+    if _orb_aeq(cABE,0) and _orb_aeq(cABF,0):
+        ABn=_orb_norm((B[1]-A[1],A[0]-B[0])); EFn=_orb_norm((F[1]-E[1],E[0]-F[0]))
+        if abs(ABn[1]*EFn[0]-ABn[0]*EFn[1])<1e-7 and ABn[1]*EFn[1]+ABn[0]*EFn[0]<0:
+            nd=ABn[1]*direction[1]+ABn[0]*direction[0]
+            if _orb_aeq(nd,0): return None
+            if nd<0: return 0.0
+        return None
+    ds=[]
+    if _orb_aeq(dA,dE): ds.append(cA-cE)
+    elif _orb_aeq(dA,dF): ds.append(cA-cF)
+    elif EFmin<dA<EFmax:
+        d=_orb_pointdist(A,E,F,rev)
+        if d is not None and _orb_aeq(d,0):
+            dBp=_orb_pointdist(B,E,F,rev,True)
+            if dBp<0 or _orb_aeq(dBp*overlap,0): d=None
+        if d is not None: ds.append(d)
+    if _orb_aeq(dB,dE): ds.append(cB-cE)
+    elif _orb_aeq(dB,dF): ds.append(cB-cF)
+    elif EFmin<dB<EFmax:
+        d=_orb_pointdist(B,E,F,rev)
+        if d is not None and _orb_aeq(d,0):
+            dBp=_orb_pointdist(A,E,F,rev,True)
+            if dBp<0 or _orb_aeq(dBp*overlap,0): d=None
+        if d is not None: ds.append(d)
+    if ABmin<dE<ABmax:
+        d=_orb_pointdist(E,A,B,direction)
+        if d is not None and _orb_aeq(d,0):
+            dBp=_orb_pointdist(F,A,B,direction,True)
+            if dBp<0 or _orb_aeq(dBp*overlap,0): d=None
+        if d is not None: ds.append(d)
+    if ABmin<dF<ABmax:
+        d=_orb_pointdist(F,A,B,direction)
+        if d is not None and _orb_aeq(d,0):
+            dBp=_orb_pointdist(E,A,B,direction,True)
+            if dBp<0 or _orb_aeq(dBp*overlap,0): d=None
+        if d is not None: ds.append(d)
+    return min(ds) if ds else None
+def _orb_slidedist(A,B,direction):
+    dr=_orb_norm(direction); eA=A+[A[0]]; eB=B+[B[0]]; dist=None
+    for i in range(len(eB)-1):
+        for j in range(len(eA)-1):
+            A1,A2=eA[j],eA[j+1]; B1,B2=eB[i],eB[i+1]
+            if (_orb_aeq(A1[0],A2[0]) and _orb_aeq(A1[1],A2[1])) or (_orb_aeq(B1[0],B2[0]) and _orb_aeq(B1[1],B2[1])): continue
+            d=_orb_segdist(A1,A2,B1,B2,dr)
+            if d is not None and (dist is None or d<dist) and (d>0 or _orb_aeq(d,0)): dist=d
+    return dist
+def _orb_nfp_outer(A,B):
+    minAi=min(range(len(A)),key=lambda i:A[i][1]); maxBi=max(range(len(B)),key=lambda i:B[i][1])
+    ox=A[minAi][0]-B[maxBi][0]; oy=A[minAi][1]-B[maxBi][1]
+    Bo=[(p[0]+ox,p[1]+oy) for p in B]; prev=None
+    NFP=[(Bo[0][0],Bo[0][1])]; rx,ry=Bo[0]; sx,sy=rx,ry; nA,nB=len(A),len(B)
+    for _ in range(10*(nA+nB)):
+        T=[]
+        for i in range(nA):
+            ni=(i+1)%nA
+            for j in range(nB):
+                nj=(j+1)%nB
+                if _orb_aeq(A[i][0],Bo[j][0]) and _orb_aeq(A[i][1],Bo[j][1]): T.append((0,i,j))
+                elif _orb_onseg(A[i],A[ni],Bo[j]): T.append((1,ni,j))
+                elif _orb_onseg(Bo[j],Bo[nj],A[i]): T.append((2,i,nj))
+        V=[]
+        for (ty,ai,bj) in T:
+            vA=A[ai]; pA=A[(ai-1)%nA]; nA_=A[(ai+1)%nA]; vB=Bo[bj]; pB=Bo[(bj-1)%nB]; nB_=Bo[(bj+1)%nB]
+            if ty==0:
+                V+=[((pA[0]-vA[0],pA[1]-vA[1])),((nA_[0]-vA[0],nA_[1]-vA[1])),((vB[0]-pB[0],vB[1]-pB[1])),((vB[0]-nB_[0],vB[1]-nB_[1]))]
+            elif ty==1:
+                V+=[((vA[0]-vB[0],vA[1]-vB[1])),((pA[0]-vB[0],pA[1]-vB[1]))]
+            elif ty==2:
+                V+=[((vA[0]-vB[0],vA[1]-vB[1])),((vA[0]-pB[0],vA[1]-pB[1]))]
+        tr=None; md=0.0
+        for vec in V:
+            if _orb_aeq(vec[0],0) and _orb_aeq(vec[1],0): continue
+            if prev is not None and vec[1]*prev[1]+vec[0]*prev[0]<0:
+                u=_orb_norm(vec); pu=_orb_norm(prev)
+                if abs(u[1]*pu[0]-u[0]*pu[1])<1e-4: continue
+            d=_orb_slidedist(A,Bo,vec); v2=vec[0]*vec[0]+vec[1]*vec[1]
+            if d is None or d*d>v2: d=_orb_math.sqrt(v2)
+            if d>md: md=d; tr=vec
+        if tr is None or _orb_aeq(md,0): return None
+        prev=tr; v2=tr[0]**2+tr[1]**2
+        if md*md<v2 and not _orb_aeq(md*md,v2):
+            sc=_orb_math.sqrt((md*md)/v2); tr=(tr[0]*sc,tr[1]*sc)
+        rx+=tr[0]; ry+=tr[1]; Bo=[(p[0]+tr[0],p[1]+tr[1]) for p in Bo]
+        if _orb_aeq(rx,sx) and _orb_aeq(ry,sy): break
+        if any(_orb_aeq(rx,NFP[k][0]) and _orb_aeq(ry,NFP[k][1]) for k in range(len(NFP)-1)): break
+        NFP.append((rx,ry))
+    return NFP
+def compute_nfp_orbital(A, B, spacing=0.0, simplify_tol=0.05):
+    """Orbital (sliding) no-fit polygon — outer loop only. DORMANT: gate-validated
+    exact on convex + hole-free concave shapes; not wired into nest_shapes.
+    TODO: interior NFP loops (counter voids) + speed optimization before use."""
+    if simplify_tol:
+        A=A.simplify(simplify_tol,preserve_topology=True); B=B.simplify(simplify_tol,preserve_topology=True)
+    ca=[(x,y) for x,y in list(A.exterior.coords)[:-1]]; cb=[(x,y) for x,y in list(B.exterior.coords)[:-1]]
+    loop=_orb_nfp_outer(ca,cb)
+    if loop is None or len(loop)<3: return _NFPPolygon()
+    poly=_NFPPolygon(loop)
+    if not poly.is_valid: poly=poly.buffer(0)
+    if spacing: poly=poly.buffer(spacing, join_style=2)
+    return poly
