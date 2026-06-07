@@ -4,6 +4,9 @@
 # Supports rotation modes: none, 90, 180, 270, free.
 # Nothing in this file knows about the UI or PDF reading.
 
+import os
+from concurrent.futures import ProcessPoolExecutor
+
 from models.shape import PlacedShape
 from shapely.geometry import Polygon as ShapelyPolygon
 from shapely.prepared import prep
@@ -17,6 +20,7 @@ SHEET_W_IN         = 48.0
 SHEET_H_IN         = 96.0
 DEFAULT_PADDING_IN  = 0.25
 DEFAULT_SPACING_IN  = 0.1969
+NFP_SIMPLIFY_TOL    = 0.5  # caps NFP polygon detail for speed; the exact-contour guard still prevents overlaps
 
 # Valid rotation modes
 # none  — no rotation allowed (Coroplast / flute-direction materials)
@@ -610,7 +614,7 @@ def _nfp_pair(keyA, polyA, keyB, polyB, spacing):
     cached = _NFP_PAIR_CACHE.get(k)
     if cached is not None:
         return cached
-    region = compute_nfp(polyA, polyB, spacing=spacing, simplify_tol=0.10)
+    region = compute_nfp(polyA, polyB, spacing=spacing, simplify_tol=NFP_SIMPLIFY_TOL)
     _NFP_PAIR_CACHE[k] = region
     return region
 
@@ -805,41 +809,45 @@ def _nfp_last_density(sheets, sheet_w, sheet_h):
     return used / (sheet_w * sheet_h) * 100.0
 
 
+def _sk_perim(s): return s.contour_polygon.length if s.contour_polygon else 0.0
+def _sk_carea(s): return s.contour_polygon.area if s.contour_polygon else s.area()
+def _ord_0(ks):  return -max(ks[1].width_in, ks[1].height_in)
+def _ord_1(ks):  return -ks[1].area()
+def _ord_2(ks):  return -ks[1].height_in
+def _ord_3(ks):  return -ks[1].width_in
+def _ord_4(ks):  return -_sk_perim(ks[1])
+def _ord_5(ks):  return -min(ks[1].width_in, ks[1].height_in)
+def _ord_6(ks):  return -(ks[1].area() * ks[1].height_in)
+def _ord_7(ks):  return (-round(ks[1].height_in, 1), -ks[1].width_in)
+def _ord_8(ks):  return (-round(ks[1].width_in, 1), -ks[1].height_in)
+def _ord_9(ks):  return -_sk_carea(ks[1])
+def _ord_10(ks): return (-round(max(ks[1].width_in, ks[1].height_in), 1), -ks[1].area())
+def _ord_11(ks): return (-round(_sk_perim(ks[1]), 0), -ks[1].height_in)
+_NFP_ORDERINGS = [_ord_0,_ord_1,_ord_2,_ord_3,_ord_4,_ord_5,
+                  _ord_6,_ord_7,_ord_8,_ord_9,_ord_10,_ord_11]
+
+
+def _nfp_run_ordering(payload):
+    ki, shapes, sw, sh, pad, sp, rot, tol = payload
+    globals()['NFP_SIMPLIFY_TOL'] = tol
+    base = [(i, s) for i, s in enumerate(shapes)]
+    order = sorted(base, key=_NFP_ORDERINGS[ki])
+    _NFP_PAIR_CACHE.clear()
+    sheets = _nfp_full_run(order, sw, sh, pad, sp, rot)
+    return (len(sheets), round(_nfp_last_density(sheets, sw, sh), 2)), sheets
+
+
 def _nest_nfp(shapes, sheet_w, sheet_h, padding, spacing, rotation_mode):
     """Deterministic keep-best over several sort orders; returns list[list[PlacedShape]]."""
-    _NFP_PAIR_CACHE.clear()
-    base = [(i, s) for i, s in enumerate(shapes)]
-
-    def _perim(s):
-        return s.contour_polygon.length if s.contour_polygon else 0.0
-
-    def _carea(s):
-        return s.contour_polygon.area if s.contour_polygon else s.area()
-
-    # A dozen DETERMINISTIC orderings (no RNG, reproducible across machines).
-    # Irregular-nesting packing is sensitively dependent on float/GEOS jitter,
-    # so we try many orderings and keep the best; speed is not a concern.
-    sort_keys = [
-        lambda ks: -max(ks[1].width_in, ks[1].height_in),
-        lambda ks: -ks[1].area(),
-        lambda ks: -ks[1].height_in,
-        lambda ks: -ks[1].width_in,
-        lambda ks: -_perim(ks[1]),
-        lambda ks: -min(ks[1].width_in, ks[1].height_in),
-        lambda ks: -(ks[1].area() * ks[1].height_in),
-        lambda ks: (-round(ks[1].height_in, 1), -ks[1].width_in),
-        lambda ks: (-round(ks[1].width_in, 1), -ks[1].height_in),
-        lambda ks: -_carea(ks[1]),
-        lambda ks: (-round(max(ks[1].width_in, ks[1].height_in), 1), -ks[1].area()),
-        lambda ks: (-round(_perim(ks[1]), 0), -ks[1].height_in),
-    ]
-    best = None
-    for key in sort_keys:
-        order = sorted(base, key=key)
-        sheets = _nfp_full_run(order, sheet_w, sheet_h, padding, spacing, rotation_mode)
-        score = (len(sheets), round(_nfp_last_density(sheets, sheet_w, sheet_h), 2))
-        if best is None or score < best[0]:
-            best = (score, sheets)
+    tol = 0.10 if len(shapes) <= 40 else 0.5   # fine detail small, coarse large
+    payloads = [(ki, shapes, sheet_w, sheet_h, padding, spacing, rotation_mode, tol)
+                for ki in range(len(_NFP_ORDERINGS))]
+    try:
+        with ProcessPoolExecutor(max_workers=min(len(_NFP_ORDERINGS), os.cpu_count() or 1)) as ex:
+            results = list(ex.map(_nfp_run_ordering, payloads))
+    except Exception:
+        results = [_nfp_run_ordering(p) for p in payloads]   # serial fallback
+    best = min(results, key=lambda r: r[0])
     sheets = best[1]
 
     # Convert to PlacedShape, with horizontal block-centering per sheet (x-only,
