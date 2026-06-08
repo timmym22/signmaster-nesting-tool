@@ -3,6 +3,7 @@
 # This file does nothing except start the application.
 # All logic lives in the core/ and ui/ modules.
 
+import multiprocessing
 import tkinter as tk
 from ui.app import NestingApp
 
@@ -14,4 +15,5 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()
