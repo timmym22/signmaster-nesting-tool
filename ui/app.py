@@ -29,7 +29,7 @@ class NestingApp:
         self.root = root
         self.root.title("SignMaster Nesting Tool")
         self.root.geometry("1200x850")
-        self.root.configure(bg="#f0f0f0")
+        self.root.configure(bg="#f7f8fa")
 
         # Window icon (SM mark) — optional, skip gracefully if missing
         try:
@@ -294,7 +294,8 @@ class NestingApp:
         tk.Label(top, text="This can take a moment on large jobs.",
                  bg="#1A1A1C", fg="#9a9aa0",
                  font=("Segoe UI", 9)).pack(padx=36, pady=(0, 12))
-        pb = ttk.Progressbar(top, mode="indeterminate", length=260)
+        pb = ttk.Progressbar(top, mode="indeterminate", length=260,
+                             style="SM.Horizontal.TProgressbar")
         pb.pack(padx=36, pady=(0, 22))
         pb.start(12)
         top.protocol("WM_DELETE_WINDOW", lambda: None)  # no close during run

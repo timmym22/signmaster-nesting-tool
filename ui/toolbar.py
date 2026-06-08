@@ -9,16 +9,18 @@ from tkinter import ttk
 
 # ── Colour palette ────────────────────────────────────────────────────────────
 
-BG          = "#f0f0f0"
+BG          = "#f7f8fa"          # clean near-white app background
 
 # Sign Master brand palette
 BRAND_ORANGE = "#F06020"
-BRAND_ORANGE_DK = "#D9541C"   # hover
+BRAND_ORANGE_DK = "#D9541C"      # hover
 BRAND_GRAY   = "#686870"
-BRAND_GRAY_DK = "#565660"     # hover
+BRAND_GRAY_DK = "#565660"        # hover
 HEADER_BG    = "#1A1A1C"
 
-PANEL_BG    = "#f4f5f6"
+PANEL_BG    = "#ffffff"          # group cards
+CARD_BORDER = "#e6e7ea"          # soft card outline
+ENTRY_BORDER = "#d4d5d9"         # soft entry outline
 NEUTRAL     = "#e3e4e6"
 NEUTRAL_DK  = "#d2d3d6"
 TEXT_DARK   = "#2b2b2e"
@@ -29,6 +31,41 @@ UI_FONT       = ("Segoe UI", 10)
 UI_FONT_BOLD  = ("Segoe UI", 10, "bold")
 LABEL_FONT    = ("Segoe UI", 9)
 GROUP_FONT    = ("Segoe UI", 8, "bold")
+
+
+def _init_ttk_style(root):
+    """Brand the ttk widgets (combobox + progressbar) with a flat modern look."""
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except tk.TclError:
+        pass
+
+    style.configure("SM.TCombobox",
+                    fieldbackground="white", background="white",
+                    bordercolor=ENTRY_BORDER, lightcolor=ENTRY_BORDER,
+                    darkcolor=ENTRY_BORDER, arrowcolor=BRAND_GRAY,
+                    foreground=TEXT_DARK, relief="flat",
+                    padding=4, font=LABEL_FONT)
+    style.map("SM.TCombobox",
+              fieldbackground=[("readonly", "white")],
+              selectbackground=[("readonly", "white")],
+              selectforeground=[("readonly", TEXT_DARK)],
+              bordercolor=[("focus", BRAND_ORANGE)],
+              arrowcolor=[("active", BRAND_ORANGE)])
+
+    # Dropdown list popup
+    root.option_add("*TCombobox*Listbox.background", "white")
+    root.option_add("*TCombobox*Listbox.foreground", TEXT_DARK)
+    root.option_add("*TCombobox*Listbox.selectBackground", BRAND_ORANGE)
+    root.option_add("*TCombobox*Listbox.selectForeground", "white")
+    root.option_add("*TCombobox*Listbox.font", LABEL_FONT)
+
+    # Loading-popup progressbar
+    style.configure("SM.Horizontal.TProgressbar",
+                    troughcolor=NEUTRAL, background=BRAND_ORANGE,
+                    bordercolor=NEUTRAL, lightcolor=BRAND_ORANGE,
+                    darkcolor=BRAND_ORANGE)
 
 
 def _button(parent, text, color, command=None, fg="white",
@@ -46,12 +83,23 @@ def _button(parent, text, color, command=None, fg="white",
     return btn
 
 
+def _entry(parent, textvariable, width):
+    """A flat entry with a soft border and a brand focus ring."""
+    return tk.Entry(
+        parent, textvariable=textvariable, width=width,
+        font=LABEL_FONT, relief="flat", bd=0, bg="white",
+        highlightthickness=1, highlightbackground=ENTRY_BORDER,
+        highlightcolor=BRAND_ORANGE,
+    )
+
+
 def _group(parent, title):
-    """A titled, lightly-bordered section frame for grouping controls."""
+    """A borderless white 'card' section with a small uppercase title."""
     outer = tk.LabelFrame(
-        parent, text=title.upper(), bg=PANEL_BG, fg=BRAND_GRAY,
-        font=GROUP_FONT, bd=1, relief="solid",
-        labelanchor="nw", padx=8, pady=6,
+        parent, text="  " + title.upper() + "  ", bg=PANEL_BG, fg=BRAND_GRAY,
+        font=GROUP_FONT, bd=0, relief="flat",
+        highlightthickness=1, highlightbackground=CARD_BORDER,
+        highlightcolor=CARD_BORDER, labelanchor="nw", padx=12, pady=10,
     )
     return outer
 
@@ -62,14 +110,15 @@ def build_toolbar(root, callbacks, defaults):
 
     Returns:
         refs : dict of widget references the app needs to read or update:
-                 spacing_var, padding_var, rotation_var, method_var,
-                 status_var, sheet_label, usage_label
+                 spacing_var, padding_var, rotation_var, sheet_w_var,
+                 sheet_h_var, nest_btn, status_var, sheet_label, usage_label
     """
+    _init_ttk_style(root)
     refs = {}
 
-    # ── Control bar (grouped, labeled sections) ─────────────────────────────────
-    bar = tk.Frame(root, bg=BG, pady=10)
-    bar.pack(fill="x", padx=12)
+    # ── Control bar (grouped cards) ─────────────────────────────────────────────
+    bar = tk.Frame(root, bg=BG, pady=12)
+    bar.pack(fill="x", padx=14)
 
     # File group
     g_file = _group(bar, "File")
@@ -87,7 +136,7 @@ def build_toolbar(root, callbacks, defaults):
              font=LABEL_FONT).pack(side="left", padx=(0, 4))
     rotation_var = tk.StringVar(value=defaults.get("rotation", "0/180"))
     ttk.Combobox(g_nest, textvariable=rotation_var,
-                 values=["0/180"],
+                 values=["0/180"], style="SM.TCombobox",
                  state="readonly", width=7, font=LABEL_FONT
                  ).pack(side="left", padx=(0, 10))
     refs["rotation_var"] = rotation_var
@@ -104,17 +153,13 @@ def build_toolbar(root, callbacks, defaults):
     tk.Label(g_space, text="Gap", bg=PANEL_BG, fg=TEXT_DARK,
              font=LABEL_FONT).pack(side="left", padx=(0, 4))
     spacing_var = tk.StringVar(value=str(defaults.get("spacing", 0.1969)))
-    tk.Entry(g_space, textvariable=spacing_var, width=7,
-             font=LABEL_FONT, relief="solid", bd=1
-             ).pack(side="left", padx=(0, 10))
+    _entry(g_space, spacing_var, 7).pack(side="left", ipady=3, padx=(0, 10))
     refs["spacing_var"] = spacing_var
 
     tk.Label(g_space, text="Edge", bg=PANEL_BG, fg=TEXT_DARK,
              font=LABEL_FONT).pack(side="left", padx=(0, 4))
     padding_var = tk.StringVar(value=str(defaults.get("padding", 0.25)))
-    tk.Entry(g_space, textvariable=padding_var, width=7,
-             font=LABEL_FONT, relief="solid", bd=1
-             ).pack(side="left", padx=(0, 2))
+    _entry(g_space, padding_var, 7).pack(side="left", ipady=3, padx=(0, 2))
     refs["padding_var"] = padding_var
 
     # Sheet group
@@ -124,17 +169,13 @@ def build_toolbar(root, callbacks, defaults):
     tk.Label(g_sheet, text="W", bg=PANEL_BG, fg=TEXT_DARK,
              font=LABEL_FONT).pack(side="left", padx=(0, 4))
     sheet_w_var = tk.StringVar(value=str(defaults.get("sheet_w", 48.0)))
-    tk.Entry(g_sheet, textvariable=sheet_w_var, width=6,
-             font=LABEL_FONT, relief="solid", bd=1
-             ).pack(side="left", padx=(0, 8))
+    _entry(g_sheet, sheet_w_var, 6).pack(side="left", ipady=3, padx=(0, 8))
     refs["sheet_w_var"] = sheet_w_var
 
     tk.Label(g_sheet, text="H", bg=PANEL_BG, fg=TEXT_DARK,
              font=LABEL_FONT).pack(side="left", padx=(0, 4))
     sheet_h_var = tk.StringVar(value=str(defaults.get("sheet_h", 96.0)))
-    tk.Entry(g_sheet, textvariable=sheet_h_var, width=6,
-             font=LABEL_FONT, relief="solid", bd=1
-             ).pack(side="left", padx=(0, 2))
+    _entry(g_sheet, sheet_h_var, 6).pack(side="left", ipady=3, padx=(0, 2))
     refs["sheet_h_var"] = sheet_h_var
 
     # View group
@@ -147,14 +188,14 @@ def build_toolbar(root, callbacks, defaults):
     _button(g_view, "Fit", NEUTRAL, callbacks.get("zoom_fit"), fg=TEXT_DARK,
             hover=NEUTRAL_DK).pack(side="left", padx=2)
 
-    # Rotation legend (subtle, full-width line under the bar)
+    # Rotation legend
     tk.Label(root, text="0/180 = flute-safe for Coroplast",
-             bg=BG, fg="#999999", font=("Segoe UI", 8)
-             ).pack(anchor="w", padx=16)
+             bg=BG, fg="#9a9aa0", font=("Segoe UI", 8)
+             ).pack(anchor="w", padx=18)
 
     # ── Sheet navigation row ──────────────────────────────────────────────────
     nav = tk.Frame(root, bg=BG, pady=6)
-    nav.pack(fill="x", padx=12)
+    nav.pack(fill="x", padx=14)
 
     _button(nav, "◀ Prev Sheet", BRAND_GRAY, callbacks.get("prev_sheet"),
             hover=BRAND_GRAY_DK, font=UI_FONT, padx=12, pady=5
@@ -173,7 +214,7 @@ def build_toolbar(root, callbacks, defaults):
              font=UI_FONT).pack(side="right", padx=8)
     refs["usage_label"] = usage_label
 
-    # ── Status bar (dark, brand) ────────────────────────────────────────────────
+    # ── Status bar ──────────────────────────────────────────────────────────────
     status_var = tk.StringVar(value="Load a PDF to begin.")
     tk.Frame(root, bg=BRAND_ORANGE, height=2).pack(fill="x")  # accent line
     tk.Label(root, textvariable=status_var, bg=STATUS_BG, fg=STATUS_FG,
