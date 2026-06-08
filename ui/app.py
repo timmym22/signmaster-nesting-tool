@@ -225,7 +225,7 @@ class NestingApp:
         rotation_display = self.refs["rotation_var"].get()
         # UI shows "0/180"; the nester's internal mode name is "none/180".
         rotation_mode = "none/180" if rotation_display == "0/180" else rotation_display
-        method = self.refs["method_var"].get()
+        method = "nfp"
 
         self.sheet_w = self._sheet_w()
         self.sheet_h = self._sheet_h()
@@ -247,7 +247,7 @@ class NestingApp:
         self.status_var.set(
             f"{total_shapes} shapes arranged across "
             f"{total} sheet{'s' if total != 1 else ''}  ·  "
-            f"Rotation: {rotation_display}  ·  Method: {method}"
+            f"Rotation: {rotation_display}"
         )
 
         self._fit_current()

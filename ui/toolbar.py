@@ -83,20 +83,11 @@ def build_toolbar(root, callbacks, defaults):
     g_nest = _group(bar, "Nesting")
     g_nest.pack(side="left", padx=(0, 10), fill="y")
 
-    tk.Label(g_nest, text="Method", bg=PANEL_BG, fg=TEXT_DARK,
-             font=LABEL_FONT).pack(side="left", padx=(0, 4))
-    method_var = tk.StringVar(value="nfp")
-    ttk.Combobox(g_nest, textvariable=method_var,
-                 values=["nfp", "contour", "bounding box"],
-                 state="readonly", width=11, font=LABEL_FONT
-                 ).pack(side="left", padx=(0, 10))
-    refs["method_var"] = method_var
-
     tk.Label(g_nest, text="Rotation", bg=PANEL_BG, fg=TEXT_DARK,
              font=LABEL_FONT).pack(side="left", padx=(0, 4))
     rotation_var = tk.StringVar(value=defaults.get("rotation", "0/180"))
     ttk.Combobox(g_nest, textvariable=rotation_var,
-                 values=["0/180", "90°", "180°", "270°", "free"],
+                 values=["0/180"],
                  state="readonly", width=7, font=LABEL_FONT
                  ).pack(side="left", padx=(0, 10))
     refs["rotation_var"] = rotation_var
