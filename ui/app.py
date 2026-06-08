@@ -4,8 +4,9 @@
 # any PDF reading, nesting, or drawing logic itself.
 
 import os
+import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageTk
 
 from core.extractor import extract_shapes
@@ -218,40 +219,102 @@ class NestingApp:
         if not self.shapes:
             self.status_var.set("No shapes loaded. Load a PDF first.")
             return
+        if getattr(self, "_nesting", False):
+            return  # already running — ignore re-clicks
 
-        self.status_var.set("Nesting shapes…")
-        self.root.update_idletasks()
-
+        # Read all Tk vars on the main thread before handing off to the worker.
         rotation_display = self.refs["rotation_var"].get()
-        # UI shows "0/180"; the nester's internal mode name is "none/180".
         rotation_mode = "none/180" if rotation_display == "0/180" else rotation_display
-        method = "nfp"
+        sheet_w = self._sheet_w()
+        sheet_h = self._sheet_h()
+        padding = self._padding()
+        spacing = self._spacing()
 
-        self.sheet_w = self._sheet_w()
-        self.sheet_h = self._sheet_h()
-        self.sheets = nest_shapes(
-            self.shapes,
-            sheet_w       = self.sheet_w,
-            sheet_h       = self.sheet_h,
-            padding       = self._padding(),
-            spacing       = self._spacing(),
-            rotation_mode = rotation_mode,
-            method        = method,
-        )
+        self._nesting = True
+        self.refs["nest_btn"].config(state="disabled")
+        self._open_loading_popup()
+        self.status_var.set("Nesting shapes…")
 
-        self.mode          = "nested"
+        result = {}
+
+        def worker():
+            try:
+                result["sheets"] = nest_shapes(
+                    self.shapes,
+                    sheet_w=sheet_w, sheet_h=sheet_h,
+                    padding=padding, spacing=spacing,
+                    rotation_mode=rotation_mode, method="nfp",
+                )
+            except Exception as exc:  # surfaced on the main thread
+                result["error"] = exc
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        self._poll_nest(t, result, rotation_display, sheet_w, sheet_h)
+
+    def _poll_nest(self, t, result, rotation_display, sheet_w, sheet_h):
+        if t.is_alive():
+            self.root.after(100, self._poll_nest, t, result,
+                            rotation_display, sheet_w, sheet_h)
+            return
+
+        # Worker finished — all UI work happens here, on the main thread.
+        self._close_loading_popup()
+        self.refs["nest_btn"].config(state="normal")
+        self._nesting = False
+
+        if "error" in result:
+            self.status_var.set(f"Nesting failed: {result['error']}")
+            messagebox.showerror("Nesting failed", str(result["error"]))
+            return
+
+        self.sheets = result["sheets"]
+        self.sheet_w = sheet_w
+        self.sheet_h = sheet_h
+        self.mode = "nested"
         self.current_sheet = 0
-        total        = len(self.sheets)
+        total = len(self.sheets)
         total_shapes = sum(len(s) for s in self.sheets)
-
         self.status_var.set(
             f"{total_shapes} shapes arranged across "
             f"{total} sheet{'s' if total != 1 else ''}  ·  "
             f"Rotation: {rotation_display}"
         )
-
         self._fit_current()
         self._render_current()
+
+    def _open_loading_popup(self):
+        top = tk.Toplevel(self.root)
+        top.title("Working")
+        top.configure(bg="#1A1A1C")
+        top.resizable(False, False)
+        top.transient(self.root)
+        tk.Label(top, text="Nesting shapes…", bg="#1A1A1C", fg="#e8e8ea",
+                 font=("Segoe UI", 11, "bold")).pack(padx=36, pady=(22, 6))
+        tk.Label(top, text="This can take a moment on large jobs.",
+                 bg="#1A1A1C", fg="#9a9aa0",
+                 font=("Segoe UI", 9)).pack(padx=36, pady=(0, 12))
+        pb = ttk.Progressbar(top, mode="indeterminate", length=260)
+        pb.pack(padx=36, pady=(0, 22))
+        pb.start(12)
+        top.protocol("WM_DELETE_WINDOW", lambda: None)  # no close during run
+        top.update_idletasks()
+        px, py = self.root.winfo_rootx(), self.root.winfo_rooty()
+        pw, ph = self.root.winfo_width(), self.root.winfo_height()
+        w, h = top.winfo_width(), top.winfo_height()
+        top.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+        top.grab_set()
+        self._loading_popup = top
+
+    def _close_loading_popup(self):
+        top = getattr(self, "_loading_popup", None)
+        if top is not None:
+            try:
+                top.grab_release()
+                top.destroy()
+            except Exception:
+                pass
+            self._loading_popup = None
 
     def export_pdf(self):
         if not self.sheets:

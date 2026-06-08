@@ -92,8 +92,10 @@ def build_toolbar(root, callbacks, defaults):
                  ).pack(side="left", padx=(0, 10))
     refs["rotation_var"] = rotation_var
 
-    _button(g_nest, "Nest Shapes", BRAND_ORANGE, callbacks.get("nest_shapes"),
-            hover=BRAND_ORANGE_DK).pack(side="left", padx=3)
+    nest_btn = _button(g_nest, "Nest Shapes", BRAND_ORANGE,
+                       callbacks.get("nest_shapes"), hover=BRAND_ORANGE_DK)
+    nest_btn.pack(side="left", padx=3)
+    refs["nest_btn"] = nest_btn
 
     # Spacing group
     g_space = _group(bar, "Spacing (in)")
