@@ -44,6 +44,7 @@ exe = EXE(
     upx=False,
     console=False,  # windowed app — no console window for end users.
     disable_windowed_traceback=False,
+    icon='assets/icon.ico',
 )
 
 coll = COLLECT(
