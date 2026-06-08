@@ -42,7 +42,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,   # FIRST build: keep the console so any startup error is visible.
+    console=False,  # windowed app — no console window for end users.
     disable_windowed_traceback=False,
 )
 
